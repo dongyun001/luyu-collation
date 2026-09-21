@@ -67,6 +67,12 @@ pip install pytest
 python -m pytest tests/
 ```
 
+## CI 与密钥安全
+
+- 推送后 GitHub Actions 自动跑测试（Python 3.10–3.12）与敏感文件入库检查，配置见 `.github/workflows/ci.yml`
+- 密钥只放本地 `.env`（复制 `.env.example` 后填入），该文件已被 `.gitignore` 忽略，**严禁提交**
+- 需要共享的密钥走仓库 Settings → Secrets and variables → Actions，在 CI 中以 `${{ secrets.XXX }}` 注入
+
 ## 技术选型（草案）
 
 - 语言：Python ≥ 3.10

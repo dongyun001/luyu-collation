@@ -28,6 +28,13 @@
 - 新增模块放在 `src/guji_collate/modules/`，实现 `run()` 方法并在 `pipeline.py` 中注册
 - 不把真实古籍数据、密钥、本地配置提交入库（见 `.gitignore`）
 
+## 密钥与敏感信息
+
+- 密钥一律放本地 `.env`（复制 `.env.example` 改名填入），**严禁提交**；`.env` 与 `configs/local.yaml` 已在 `.gitignore` 中
+- 密钥名约定：LLM 接口密钥用 `GUJI_LLM_API_KEY`（与 `configs/default.yaml` 的 `llm.api_key_env` 对应）
+- CI 里有敏感文件入库检查（`.github/workflows/ci.yml`），提交了 `.env` 会直接变红
+- 需要在 CI 里用共享密钥时，走 GitHub 仓库 Settings → Secrets and variables → Actions，用 `${{ secrets.XXX }}` 注入
+
 ## 目录职责
 
 | 目录 | 职责 |
