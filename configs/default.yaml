@@ -1,0 +1,32 @@
+# 全局默认配置。
+# 本地覆盖：复制为 configs/local.yaml（已被 .gitignore 忽略），加载时覆盖同名键。
+
+project:
+  name: guji-collation-tool
+
+paths:
+  data_root: data
+  raw_images: data/raw_images
+  raw_texts: data/raw_texts
+  normalized: data/normalized
+  output: data/output
+
+ocr:
+  engine: dummy        # dummy | paddleocr
+  language: chinese_cht
+
+llm:
+  base_url: ""         # OpenAI 兼容接口，例如 https://api.example.com/v1
+  api_key_env: GUJI_LLM_API_KEY
+  model: ""
+  temperature: 0
+
+collation:
+  base_edition: ""     # 底本
+  compare_editions: [] # 参校本列表
+
+punctuation:
+  mode: llm            # llm | rule
+
+translation:
+  target: modern_zh    # modern_zh | english

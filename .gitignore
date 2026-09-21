@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+
+# 本地配置与密钥
+.env
+configs/local.yaml
+
+# 数据（原始影像/文本与输出默认不入库，仅保留目录占位）
+data/raw_images/*
+data/raw_texts/*
+data/normalized/*
+data/output/*
+!data/raw_images/.gitkeep
+!data/raw_texts/.gitkeep
+!data/normalized/.gitkeep
+!data/output/.gitkeep
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
