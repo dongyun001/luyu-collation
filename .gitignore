@@ -1,29 +1,44 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-dist/
-build/
-.pytest_cache/
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# æœ¬åœ°é…ç½®ä¸å¯†é’¥
-.env
-configs/local.yaml
-
-# æ•°æ®ï¼ˆåŸå§‹å½±åƒ/æ–‡æœ¬ä¸è¾“å‡ºé»˜è®¤ä¸å…¥åº“ï¼Œä»…ä¿ç•™ç›®å½•å ä½ï¼‰
-data/raw_images/*
-data/raw_texts/*
-data/normalized/*
-data/output/*
-!data/raw_images/.gitkeep
-!data/raw_texts/.gitkeep
-!data/normalized/.gitkeep
-!data/output/.gitkeep
-
-# IDE / ç³»ç»Ÿ
-.idea/
-.vscode/
+node_modules
 .DS_Store
-Thumbs.db
+dist
+dist-ssr
+coverage
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+*.tsbuildinfo
+
+.eslintcache
+
+# Cypress
+/cypress/videos/
+/cypress/screenshots/
+
+# Vitest
+__screenshots__/
+
+# Vite
+*.timestamp-*-*.mjs
+
+# »·¾³±äÁ¿ÓëÃÜÔ¿£¨ÎğÌá½»£©
+.env
+.env.*
+!.env.example
