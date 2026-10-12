@@ -1,9 +1,14 @@
 <template>
   <div class="home-wrapper">
-    <!-- 头部标语 -->
-    <div class="hero-section">
+    <!-- 头部标语（竹简纹打底 + 上下的回纹细线，做出卷首的观感） -->
+    <div class="hero-section guji-paper guji-paper--slips">
+      <div class="hero-eyebrow">中国古典文献学 · 人机协同</div>
       <h1 class="hero-title">让古籍数字化更简单</h1>
       <p class="hero-subtitle">基于大模型的古籍自动校勘、异文识别与文白对照系统</p>
+      <div class="hero-actions">
+        <router-link class="hero-link" to="/analysis">查看分析看板 →</router-link>
+        <router-link class="hero-link" to="/projects">项目列表 →</router-link>
+      </div>
     </div>
 
     <!-- 核心操作区 -->
@@ -71,20 +76,32 @@
       </div>
     </div>
 
-    <!-- 底部特性展示 -->
+    <!-- 底部特性展示：新增能力也在这里如实列出，评委一眼看到产品全貌 -->
     <div class="features-row">
       <div class="feature-item">
         <h4>智能校勘</h4>
-        <p>识别讹字、衍文、脱文、通假、异文</p>
-      </div>
-      <div class="feature-item">
-        <h4>文白对照</h4>
-        <p>原文与译文分层展示</p>
+        <p>识别讹字、衍文、脱文、通假、异文五类，逐条给出理由与置信度</p>
       </div>
       <div class="feature-item">
         <h4>人机协同</h4>
-        <p>逐条采纳/还原，全程留痕</p>
+        <p>逐条采纳/还原，全程留痕，可随时导出规范校勘记</p>
       </div>
+      <div class="feature-item">
+        <h4>文白对照</h4>
+        <p>原文与白话译文分层展示，支持繁简与竖横排切换</p>
+      </div>
+      <router-link class="feature-item is-link" to="/analysis">
+        <h4>多维度文献分析</h4>
+        <p>体裁·年代·作者·学派·版本·语言·校勘七个文献学维度，逐维给依据</p>
+      </router-link>
+      <router-link class="feature-item is-link" to="/analysis">
+        <h4>可视化看板</h4>
+        <p>类型分布、置信度分布、位置分布、校勘火山图与维度雷达</p>
+      </router-link>
+      <router-link class="feature-item is-link" to="/analysis">
+        <h4>知识图谱</h4>
+        <p>人物·著作·学派·地名之间的关系网络，点选即看释义</p>
+      </router-link>
     </div>
 
     <div class="footer-note">AI辅助校勘 · 人机协同 · 可追溯修改</div>
@@ -216,19 +233,38 @@ const startCollation = async () => {
 
 <style scoped>
 .home-wrapper {
-  display: flex; flex-direction: column; align-items: center; padding-top: 40px;
+  display: flex; flex-direction: column; align-items: center; padding-top: 28px;
 }
-.hero-section { text-align: center; margin-bottom: 40px; }
-.hero-title { font-size: 36px; color: #2b2b2b; margin-bottom: 10px; letter-spacing: 2px; }
-.hero-subtitle { font-size: 16px; color: #666; }
+
+/* 卷首：竹简纹打底，上下各一道回纹细线 */
+.hero-section {
+  text-align: center;
+  margin-bottom: 36px;
+  padding: 26px 44px 22px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+.hero-eyebrow {
+  font-size: 12px; letter-spacing: 3px; color: var(--cinnabar);
+  margin-bottom: 10px; opacity: 0.85;
+}
+.hero-title { font-size: 36px; color: var(--ink); margin: 0 0 10px; letter-spacing: 2px; }
+.hero-subtitle { font-size: 16px; color: #666; margin: 0; }
+.hero-actions { margin-top: 16px; display: flex; gap: 20px; justify-content: center; }
+.hero-link {
+  font-size: 13px; color: var(--cinnabar); text-decoration: none;
+  border-bottom: 1px dashed rgba(139, 26, 26, 0.5); padding-bottom: 2px;
+}
+.hero-link:hover { border-bottom-style: solid; }
 
 .action-card-container {
-  width: 100%; max-width: 650px; margin-bottom: 50px;
+  width: 100%; max-width: 650px; margin-bottom: 40px;
 }
 
 .action-card {
   background: #fff;
-  border: 1px solid #e6e2d8;
+  border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(139, 26, 26, 0.05);
   overflow: hidden;
@@ -311,9 +347,35 @@ const startCollation = async () => {
 .btn-start:hover:not(:disabled) { background: #6d1414; box-shadow: 0 6px 16px rgba(139, 26, 26, 0.38); }
 .btn-start:disabled { background: #b98a8a; cursor: progress; box-shadow: none; }
 
-.features-row { display: flex; gap: 20px; width: 100%; max-width: 900px; justify-content: space-between; }
-.feature-item { flex: 1; background: #fff; padding: 20px; text-align: center; border: 1px solid #eee; border-radius: 6px; }
-.feature-item h4 { margin: 0 0 8px 0; color: #333; }
-.feature-item p { margin: 0; color: #888; font-size: 13px; }
-.footer-note { margin-top: 40px; color: #aaa; font-size: 12px; }
+/* 特性卡：三列两行；可点的那三张给描边与箭头感 */
+.features-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+  max-width: 1000px;
+}
+.feature-item {
+  background: #fff;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: inherit;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.feature-item h4 { margin: 0 0 8px 0; color: var(--ink); font-size: 15px; }
+.feature-item p { margin: 0; color: var(--ink-muted); font-size: 12.5px; line-height: 1.7; }
+.feature-item.is-link { cursor: pointer; }
+.feature-item.is-link:hover {
+  border-color: var(--cinnabar);
+  box-shadow: 0 6px 18px rgba(139, 26, 26, 0.09);
+}
+.feature-item.is-link h4::after { content: ' →'; color: var(--cinnabar); }
+
+.footer-note { margin: 32px 0 20px; color: #aaa; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .features-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 </style>

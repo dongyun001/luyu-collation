@@ -39,10 +39,27 @@ const PROGRESS_MAX_PERCENT = 95
 
 export const ALL_CHECK_TYPES = ['讹字', '衍文', '脱文', '通假', '异文']
 
+/** 决策状态全集（与 utils/chartData.js 的 STATUS_ORDER 同序） */
+export const ALL_DECISION_STATUSES = ['pending', 'accepted', 'rejected']
+
 export const DEFAULT_REFERENCE_EDITION = '通行本'
 
 /** 草稿键：仅存浏览器本地，刷新/切页不丢工作；不是服务端持久化（PRD §4「明确不做」）。 */
 const DRAFT_KEY = 'guji:collation-draft:v1'
+
+/** 一份干净的 meta（初始态、reset、载入项目三处共用，避免三份字面量各写一遍）。 */
+function makeDefaultMeta() {
+  return {
+    requestId: '',
+    model: '',
+    elapsedMs: 0,
+    droppedCount: 0,
+    referenceEdition: DEFAULT_REFERENCE_EDITION,
+    checkTypes: [...ALL_CHECK_TYPES],
+    produceTranslation: true,
+    chunkCount: 0,
+  }
+}
 
 /** 错误码 -> 给用户的处理建议（message 用后端返回的那条，这里只补「怎么办」）。 */
 const ERROR_HINTS = {
@@ -101,18 +118,7 @@ export const useCollationStore = defineStore('collation', () => {
   /** 每条：{ id, type, original, suggested, reason, confidence, offset, status } */
   const items = ref(draft?.items ?? [])
   const translation = ref(draft?.translation ?? '')
-  const meta = ref(
-    draft?.meta ?? {
-      requestId: '',
-      model: '',
-      elapsedMs: 0,
-      droppedCount: 0,
-      referenceEdition: DEFAULT_REFERENCE_EDITION,
-      checkTypes: [...ALL_CHECK_TYPES],
-      produceTranslation: true,
-      chunkCount: 0,
-    },
-  )
+  const meta = ref(draft?.meta ?? makeDefaultMeta())
   /** 修改时间线：按时间正序存放，展示时倒序。 */
   const history = ref(draft?.history ?? [])
   /** idle | loading | ready | error */
@@ -129,6 +135,20 @@ export const useCollationStore = defineStore('collation', () => {
   const failures = ref([])
   /** 失败段重试进行中（按钮置灰用）。 */
   const retryingFailure = ref(false)
+  /**
+   * 条目筛选条件（F12，2026-10-12 增补）。
+   *
+   * 放在 collation store 而不是另开 store：筛选对象就是 `items`，同一份数据两处真相
+   * 必然漂移（TECH_DESIGN §3）。语义：`types` / `statuses` 是**白名单**、默认全选；
+   * 全部取消勾选即"一条都不匹配"，如实反馈，不隐式回落成"全选"。
+   */
+  const filters = ref({
+    types: [...ALL_CHECK_TYPES],
+    statuses: [...ALL_DECISION_STATUSES],
+    confidenceMin: 0,
+    confidenceMax: 1,
+    keyword: '',
+  })
   /** 本轮的分段计划与选项：重试失败段时要知道每段的文本与全文起点。 */
   let chunkPlan = []
   let lastOptions = null
@@ -197,6 +217,49 @@ export const useCollationStore = defineStore('collation', () => {
         : 0
     return Math.min(PROGRESS_MAX_PERCENT, Math.round(Math.max(byTime, byChunks)))
   })
+
+  /**
+   * 一条条目是否通过当前筛选（F12）。
+   * 关键词匹配原文/建议/理由三处——用户找"这个字改了什么"时不一定记得是哪个字段。
+   */
+  function itemMatchesFilters(item, current) {
+    if (!current.types.includes(item.type)) return false
+    if (!current.statuses.includes(item.status)) return false
+    const confidence = Number(item.confidence)
+    if (Number.isFinite(confidence)) {
+      if (confidence < Number(current.confidenceMin)) return false
+      if (confidence > Number(current.confidenceMax)) return false
+    }
+    const keyword = String(current.keyword ?? '').trim()
+    if (keyword) {
+      const haystack = `${item.original ?? ''}${item.suggested ?? ''}${item.reason ?? ''}`
+      if (!haystack.includes(keyword)) return false
+    }
+    return true
+  }
+
+  /** 筛选后的条目（工作台列表与看板表格共用同一份口径）。 */
+  const filteredItems = computed(() =>
+    items.value.filter((item) => itemMatchesFilters(item, filters.value)),
+  )
+
+  /** 是否存在"非默认"的筛选条件（供 UI 显示"筛选中"与"清空"按钮）。 */
+  const hasActiveFilters = computed(() => {
+    const current = filters.value
+    return (
+      current.types.length !== ALL_CHECK_TYPES.length ||
+      current.statuses.length !== ALL_DECISION_STATUSES.length ||
+      Number(current.confidenceMin) > 0 ||
+      Number(current.confidenceMax) < 1 ||
+      String(current.keyword ?? '').trim() !== ''
+    )
+  })
+
+  const filterStats = computed(() => ({
+    matched: filteredItems.value.length,
+    total: items.value.length,
+    active: hasActiveFilters.value,
+  }))
 
   // --- internals ---
   function pushHistory({ action, from = '', to = '', type = '' }) {
@@ -520,6 +583,79 @@ export const useCollationStore = defineStore('collation', () => {
     pushHistory({ action: '一键还原', from: '全部建议', to: '回到原文' })
   }
 
+  // --- 筛选与统计（F12，纯前端，不调接口） ---
+
+  /** 合并式更新筛选条件（关键词输入、置信度滑块等用）。 */
+  function setFilters(patch) {
+    filters.value = { ...filters.value, ...patch }
+  }
+
+  /** 勾选/取消一个类型；保持与 ALL_CHECK_TYPES 同序，便于比对与测试。 */
+  function toggleTypeFilter(type) {
+    const set = new Set(filters.value.types)
+    if (set.has(type)) set.delete(type)
+    else set.add(type)
+    filters.value = { ...filters.value, types: ALL_CHECK_TYPES.filter((entry) => set.has(entry)) }
+  }
+
+  /** 勾选/取消一个决策状态。 */
+  function toggleStatusFilter(status) {
+    const set = new Set(filters.value.statuses)
+    if (set.has(status)) set.delete(status)
+    else set.add(status)
+    filters.value = {
+      ...filters.value,
+      statuses: ALL_DECISION_STATUSES.filter((entry) => set.has(entry)),
+    }
+  }
+
+  function resetFilters() {
+    filters.value = {
+      types: [...ALL_CHECK_TYPES],
+      statuses: [...ALL_DECISION_STATUSES],
+      confidenceMin: 0,
+      confidenceMax: 1,
+      keyword: '',
+    }
+  }
+
+  /**
+   * 常用预设。`high-pending` 回答"有哪些我可以直接采纳的"，
+   * `notes-only` 只看通假/异文（只标注不替换的那两类）。
+   */
+  function applyFilterPreset(preset) {
+    if (preset === 'high-pending') {
+      filters.value = {
+        ...filters.value,
+        statuses: ['pending'],
+        confidenceMin: LOW_CONFIDENCE_THRESHOLD,
+        confidenceMax: 1,
+      }
+      return
+    }
+    if (preset === 'notes-only') {
+      filters.value = { ...filters.value, types: ['通假', '异文'] }
+      return
+    }
+    resetFilters()
+  }
+
+  /**
+   * 采纳"当前筛选结果里的高置信条目"。
+   * 与 `acceptAll` 同一条规则（低置信不参与），只是范围收窄到筛选结果——
+   * 用户筛出"待处理 + 高置信"后一键处理，不必再被全表牵制。
+   */
+  function acceptFiltered() {
+    const targets = filteredItems.value.filter(
+      (item) => item.confidence >= LOW_CONFIDENCE_THRESHOLD && item.status !== 'accepted',
+    )
+    if (!targets.length) return
+    targets.forEach((item) => {
+      item.status = 'accepted'
+    })
+    pushHistory({ action: '采纳筛选中（高置信）', from: '筛选结果', to: `${targets.length} 条` })
+  }
+
   /**
    * 导出规范校勘记（F4）：纯规则生成，不调模型。
    * @returns {{ok: boolean, message?: string, noteText?: string, filename?: string}}
@@ -560,19 +696,46 @@ export const useCollationStore = defineStore('collation', () => {
     elapsedSeconds.value = 0
     failures.value = []
     retryingFailure.value = false
+    resetFilters()
     chunkPlan = []
     lastOptions = null
-    meta.value = {
-      requestId: '',
-      model: '',
-      elapsedMs: 0,
-      droppedCount: 0,
-      referenceEdition: DEFAULT_REFERENCE_EDITION,
-      checkTypes: [...ALL_CHECK_TYPES],
-      produceTranslation: true,
-      chunkCount: 0,
-    }
+    meta.value = makeDefaultMeta()
     clearDraft()
+  }
+
+  /**
+   * 从本机项目记录恢复一次校勘结果（F12，**不调模型**）。
+   *
+   * 用途：项目列表里点「载入」，把当时的结果（原文 + 条目 + 决策状态 + 译文）装回工作台，
+   * 继续采纳/导出。恢复后同样落草稿，刷新不丢。
+   * 先作废在途分段：否则上一轮迟到的响应会把刚装回来的结果又覆盖掉。
+   *
+   * @returns {boolean} 是否恢复成功（记录里没有原文就返回 false）
+   */
+  function restoreProject(record) {
+    if (!record || typeof record.sourceText !== 'string' || !record.sourceText) return false
+    activeRun += 1
+    stopTicking()
+    sourceText.value = record.sourceText
+    items.value = Array.isArray(record.items) ? record.items.map((item) => ({ ...item })) : []
+    translation.value = record.translation ?? ''
+    meta.value = { ...makeDefaultMeta(), ...(record.meta ?? {}) }
+    history.value = []
+    status.value = 'ready'
+    error.value = null
+    progress.value = { done: 0, total: 0 }
+    elapsedSeconds.value = 0
+    failures.value = []
+    retryingFailure.value = false
+    resetFilters()
+    chunkPlan = []
+    lastOptions = null
+    pushHistory({
+      action: '载入本机项目',
+      from: record.title || '未命名校勘',
+      to: `${items.value.length} 条建议`,
+    })
+    return true
   }
 
   return {
@@ -588,6 +751,7 @@ export const useCollationStore = defineStore('collation', () => {
     elapsedSeconds,
     failures,
     retryingFailure,
+    filters,
     // getters
     pendingItems,
     acceptedItems,
@@ -604,6 +768,9 @@ export const useCollationStore = defineStore('collation', () => {
     progressPercent,
     hasFailures,
     failureHint,
+    filteredItems,
+    hasActiveFilters,
+    filterStats,
     // actions
     submitText,
     retryFailedChunks,
@@ -611,8 +778,15 @@ export const useCollationStore = defineStore('collation', () => {
     reject,
     acceptAll,
     rejectAll,
+    setFilters,
+    toggleTypeFilter,
+    toggleStatusFilter,
+    resetFilters,
+    applyFilterPreset,
+    acceptFiltered,
     exportNote,
     clearError,
     reset,
+    restoreProject,
   }
 })

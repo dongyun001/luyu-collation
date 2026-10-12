@@ -54,13 +54,32 @@ curl -s http://localhost:3001/api/v1/collate -H "Content-Type: application/json"
 （《左传》曹刿论战，含人工注入的「代」误字）时，期望 `items` 2 条
 （讹字「代」、低置信异文「肉食者鄙」）、`droppedCount` = 6。
 
+### 多维度分析端点（F9）也能一起联调
+
+`LLM_MODEL=fake` 是**两端点通用**的：假模型会看请求里的 user prompt 要求哪种输出契约
+（`"dimensions"`/`"entities"` 还是 `"items"`），自动返回对应的固件。所以同一个模型名即可验证：
+
+```bash
+curl -s http://localhost:3001/api/v1/analyze -H "Content-Type: application/json" \
+  -d '{"text":"子曰：「学而时习之，不亦说乎？有朋自远方来，不亦乐乎？」"}'
+```
+
+期望（与 `FIXTURE_ANALYZE_EXPECTED` 一致）：
+
+- `dimensions` **7 条**（模型给了 5 个维度，另 2 个 `edition`/`collation` 由后端补 `missing: true` 占位）
+- 维度顺序固定为 nature / dating / authorship / school / edition / language / collation
+- `dating.confidence` = 0.72（模型给百分数 72，经归一化）
+- `school.uncertain` = true（模型没给 evidence，后端强制标存疑但**不丢弃**）
+- `entities` 2 个（孔子、《论语》）；`relations` 1 条（悬空边与重复边已被过滤）
+- `droppedCount` = 7（维度 3 + 实体 2 + 关系 2，构成见固件注释）
+
 ## 故障分支
 
 改 `LLM_MODEL` 即可让假模型模拟各类上游故障，验证降级提示：
 
 | `LLM_MODEL` | 假模型行为 | 期望前端/接口表现 |
 |---|---|---|
-| `fake` | 正常返回固定样本（非流式） | 200，见上 |
+| `fake` | 正常返回固定样本（非流式；按 prompt 自动区分 collate/analyze 固件） | 200，见上 |
 | `fake-badjson` | 返回非 JSON 散文 | `LLM_BAD_JSON` / 502，前端提示重试 |
 | `fake-schemafail` | JSON 合法但信封结构不对 | `LLM_BAD_JSON` / 502 |
 | `fake-timeout` | 连响应头都不给，挂起 120 秒 | `LLM_TIMEOUT` / 504（由**首块宽限**拦下） |
@@ -68,6 +87,9 @@ curl -s http://localhost:3001/api/v1/collate -H "Content-Type: application/json"
 | `fake-dribble` | 流式每秒吐一块、约 10 秒吐完 | **200 成功**——慢但在产出，不该判超时 |
 | `fake-flaky` | 奇数次调用静默、偶数次正常 | **200 成功**——停滞的段被段级重试救回 |
 | `fake-error500` | 上游返回 500 | `PROVIDER_MISCONFIGURED` / 500，消息含上游状态码 |
+| `fake-analyze` | 只回分析固件 | 200（用于 `/analyze` 的定向联调） |
+| `fake-analyze-badjson` | `/analyze` 返回非 JSON | `LLM_BAD_JSON` / 502 |
+| `fake-analyze-schemafail` | `/analyze` 的 `dimensions` 不是数组 | `LLM_BAD_JSON` / 502 |
 
 `fake-dribble` 与 `fake-stall` 是**同一个判据的两面**：**还在产出就不算失败，静默才算**。
 （判据与阈值见 PRD §4「文本分段提交」；旧版把"边吐字节但慢"也判成超时，那时这两行的期望是反的。）

@@ -82,6 +82,22 @@ export function collate(text, options) {
   })
 }
 
+/**
+ * 多维度文献分析（F9，契约见 API.md §6）。
+ *
+ * 与 /collate 相互独立：它可以单独失败，且失败不影响已到货的校勘结果。
+ * 超时沿用同一个总预算（后端 /analyze 与 /collate 走同一条 llm 调用路径）。
+ *
+ * @param {string} text 待分析原文
+ * @param {string[]} [dimensions] 七维 key 的子集；省略即全部
+ */
+export function analyzeText(text, dimensions) {
+  return request('/api/v1/analyze', {
+    method: 'POST',
+    body: dimensions && dimensions.length ? { text, dimensions } : { text },
+  })
+}
+
 /** 冒烟检查（API.md §5），演示前跑一条。 */
 export function health() {
   return request('/api/v1/health', { timeoutMs: HEALTH_TIMEOUT_MS })

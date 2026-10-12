@@ -13,6 +13,10 @@
         <button class="btn-toggle" :class="{ active: charMode === 'traditional' }" @click="charMode = 'traditional'">繁体</button>
       </div>
       <div class="tool-spacer"></div>
+      <button class="btn-toggle btn-analysis" title="打开可视化看板：多维分析、图谱与统计图" @click="goAnalysis">
+        📊 分析看板
+      </button>
+      <button class="btn-toggle" @click="goProjects">📚 项目列表</button>
       <button v-if="hasAnyState" class="btn-toggle" @click="restart">重新开始</button>
     </div>
 
@@ -145,14 +149,30 @@
             </span>
           </div>
 
+          <!-- 统计 + 筛选（F12）：同一份 items 的两种看法，纯前端、不调接口 -->
+          <div v-if="store.items.length" class="filter-panel">
+            <StatsCards :stats="filteredStats" :filtered="store.hasActiveFilters" compact />
+            <FilterBar />
+          </div>
+
           <div class="collation-list">
-            <!-- 空态：模型未发现问题 -->
+            <!-- 空态一：模型未发现问题 -->
             <div v-if="!store.items.length" class="empty-result">
               <div class="empty-icon">✓</div>
               <p class="empty-title">本段未发现需要校勘的问题</p>
               <p class="empty-text">
 {{ store.meta.droppedCount ? `另有 ${store.meta.droppedCount} 条模型建议未通过契约校验，已被拦截。` : '可以切到「文白对照」查看译文。' }}
               </p>
+            </div>
+
+            <!-- 空态二：有条目但被当前筛选条件滤空 —— 必须与"未发现问题"区分，否则会误导 -->
+            <div v-else-if="!visibleItems.length" class="empty-result">
+              <div class="empty-icon">🔍</div>
+              <p class="empty-title">当前筛选条件下没有匹配的条目</p>
+              <p class="empty-text">
+                共 {{ store.items.length }} 条校勘建议，已被筛选条件全部滤除。
+              </p>
+              <button class="btn-clear-filter" @click="store.resetFilters()">清空筛选</button>
             </div>
 
             <template v-else>
@@ -186,9 +206,9 @@
               </div>
 
               <!-- 低置信建议：折叠且不参与一键采纳（API.md §2） -->
-              <div v-if="store.lowConfidenceItems.length" class="low-confidence-group">
+              <div v-if="renderedLowConfidence.length" class="low-confidence-group">
                 <button class="group-toggle" @click="showLowConfidence = !showLowConfidence">
-                  {{ showLowConfidence ? '▾' : '▸' }} 低置信建议 {{ store.lowConfidenceItems.length }} 条
+                  {{ showLowConfidence ? '▾' : '▸' }} 低置信建议 {{ renderedLowConfidence.length }} 条
                   <span class="group-hint">置信度低于 {{ Math.round(lowConfidenceThreshold * 100) }}%，不参与「全部采纳」</span>
                 </button>
                 <template v-if="showLowConfidence">
@@ -276,7 +296,10 @@ import { useRouter } from 'vue-router'
 import OpenCC from 'opencc-js'
 
 import TranslatorWidget from '@/components/TranslatorWidget.vue'
+import FilterBar from '@/components/FilterBar.vue'
+import StatsCards from '@/components/StatsCards.vue'
 import { LOW_CONFIDENCE_THRESHOLD, useCollationStore } from '@/stores/collation'
+import { overallStats } from '@/utils/chartData'
 
 const router = useRouter()
 const store = useCollationStore()
@@ -354,8 +377,18 @@ function renderItems(source) {
   }))
 }
 
-const renderedHighConfidence = computed(() => renderItems(store.highConfidenceItems))
-const renderedLowConfidence = computed(() => renderItems(store.lowConfidenceItems))
+const renderedHighConfidence = computed(() =>
+  renderedVisibleItems.value.filter((item) => item.confidence >= LOW_CONFIDENCE_THRESHOLD),
+)
+const renderedLowConfidence = computed(() =>
+  renderedVisibleItems.value.filter((item) => item.confidence < LOW_CONFIDENCE_THRESHOLD),
+)
+/** 当前筛选命中的条目（未做繁简转换），空态判定要用它而不是 store.items */
+const visibleItems = computed(() => store.filteredItems)
+/** 筛选结果经繁简转换后的条目，供两张卡片列表渲染 */
+const renderedVisibleItems = computed(() => renderItems(store.filteredItems))
+/** 统计卡统一走 chartData 的纯函数，口径与看板完全一致 */
+const filteredStats = computed(() => overallStats(store.filteredItems, LOW_CONFIDENCE_THRESHOLD))
 const renderedTranslation = computed(() => convert(store.translation))
 const renderedTimeline = computed(() =>
   store.timeline.map((record) => ({
@@ -395,6 +428,14 @@ async function retryFailed() {
 function restart() {
   store.reset()
   router.push('/')
+}
+
+function goAnalysis() {
+  router.push('/analysis')
+}
+
+function goProjects() {
+  router.push('/projects')
 }
 </script>
 
@@ -490,6 +531,44 @@ function restart() {
   background: #8b1a1a;
   color: #fff;
   border-color: #8b1a1a;
+}
+
+/* 跳转看板/项目列表的入口按钮：描边样式，与排版/字体切换区分开 */
+.btn-analysis {
+  border-color: #8b1a1a;
+  color: #8b1a1a;
+}
+
+.btn-analysis:hover {
+  background: #8b1a1a;
+  color: #fff;
+}
+
+/* 统计 + 筛选面板（F12）：固定在结果列表上方，不随列表滚动 */
+.filter-panel {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  background: #fdfbf7;
+  border-bottom: 1px solid #f0ece3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-clear-filter {
+  margin-top: 10px;
+  padding: 4px 14px;
+  border: 1px solid #8b1a1a;
+  color: #8b1a1a;
+  background: #fff;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-clear-filter:hover {
+  background: #8b1a1a;
+  color: #fff;
 }
 
 /* ================= 状态屏（加载 / 失败 / 未提交） ================= */

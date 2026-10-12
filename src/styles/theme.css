@@ -1,0 +1,198 @@
+/**
+ * 设计 token 与共享样式（docs/VISUAL.md §5）。
+ *
+ * 定位：把原先散落在各组件 scoped 样式里的硬编码色值收敛成 CSS 变量，
+ * 供新增的看板/筛选/图谱组件使用。**新组件只写变量，不写死色值**。
+ *
+ * 与图表配色的关系：本文件顶部的类型色/状态色，与 src/utils/chartData.js 的
+ * TYPE_COLORS / STATUS_COLORS 必须同值——改色两处一起改（图里画的和徽标显示的要一致）。
+ *
+ * 类名一律加 `guji-` 前缀，因为本文件是全局样式（在 main.js 引入），不参与 scoped 隔离。
+ */
+
+:root {
+  /* --- 基础色 --- */
+  --paper: #fdfbf7; /* 宣纸底 */
+  --paper-raised: #fffdfa; /* 卡片底，比宣纸再亮一档 */
+  --ink: #2b2b2b; /* 正文字色 */
+  --ink-soft: #555;
+  --ink-muted: #888;
+  --ink-faint: #aaa;
+  --cinnabar: #8b1a1a; /* 朱红主色 */
+  --cinnabar-dark: #6d1414; /* hover / 按下 */
+  --cinnabar-wash: #fdf1f1; /* 主色浅底 */
+  --line: #e6e2d8; /* 米色边框 */
+  --line-soft: #f0ece3;
+  --success: #2e8b57;
+  --warn: #daa520;
+  --danger: #c0392b;
+
+  /* --- 五类校勘类型（与 chartData.TYPE_COLORS 同值） --- */
+  --type-ezi: #c0392b; /* 讹字 */
+  --type-yanwen: #b7791f; /* 衍文 */
+  --type-tuowen: #2b6cb0; /* 脱文 */
+  --type-tongjia: #6b46c1; /* 通假 */
+  --type-yiwen: #2c7a7b; /* 异文 */
+
+  /* --- 决策状态（与 chartData.STATUS_COLORS 同值） --- */
+  --status-pending: #8b1a1a;
+  --status-accepted: #2e8b57;
+  --status-rejected: #9aa0a6;
+
+  /* --- 排版 --- */
+  --font-serif: 'Noto Serif SC', 'SimSun', serif;
+  --font-kai: 'KaiTi', 'STKaiti', serif;
+  --font-sans: 'Helvetica Neue', Arial, 'PingFang SC', sans-serif;
+
+  /* --- 尺寸 --- */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow-card: 0 4px 16px rgba(43, 43, 43, 0.05);
+  --shadow-raise: 0 10px 30px rgba(139, 26, 26, 0.08);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+/* ================= 共享组件样式（guji- 前缀） ================= */
+
+/* 卷轴式卡片：看板每一块内容的统一外壳 */
+.guji-section {
+  position: relative;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+/* 顶部一道朱红细线，像卷轴的天头 */
+.guji-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--space-5);
+  right: var(--space-5);
+  height: 2px;
+  background: linear-gradient(90deg, var(--cinnabar), rgba(139, 26, 26, 0.15) 70%, transparent);
+  border-radius: 1px;
+}
+
+.guji-section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.guji-section__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: bold;
+  color: var(--ink);
+  letter-spacing: 1px;
+}
+
+.guji-section__sub {
+  font-size: 12px;
+  color: var(--ink-muted);
+  line-height: 1.6;
+}
+
+/* 小标签（图例、知识点 chips 通用） */
+.guji-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 2px 10px;
+  line-height: 1.7;
+}
+
+/* 免责/口径说明：分析类内容必须挂一条（docs/EVAL.md §10.5） */
+.guji-disclaimer {
+  font-size: 12px;
+  color: #8a6d3b;
+  background: #fffbf0;
+  border: 1px solid #f0e6cf;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  line-height: 1.7;
+}
+
+/* 空态：所有新看板区块统一走这个，不渲染假数据 */
+.guji-empty {
+  text-align: center;
+  color: var(--ink-muted);
+  padding: var(--space-6) var(--space-4);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.guji-empty__icon {
+  font-size: 28px;
+  opacity: 0.5;
+  display: block;
+  margin-bottom: var(--space-2);
+}
+
+/* 主按钮（看板里的动作，与首页 btn-start 视觉同源） */
+.guji-btn {
+  background: var(--cinnabar);
+  color: #fff;
+  border: none;
+  padding: 9px 22px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 14px;
+  box-shadow: 0 3px 8px rgba(139, 26, 26, 0.25);
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.guji-btn:hover:not(:disabled) {
+  background: var(--cinnabar-dark);
+  box-shadow: 0 5px 14px rgba(139, 26, 26, 0.32);
+}
+
+.guji-btn:disabled {
+  background: #b98a8a;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.guji-btn--ghost {
+  background: transparent;
+  color: var(--cinnabar);
+  border: 1px solid var(--cinnabar);
+  box-shadow: none;
+}
+
+.guji-btn--ghost:hover:not(:disabled) {
+  background: var(--cinnabar);
+  color: #fff;
+  box-shadow: none;
+}
+
+/* 键盘可达性：所有可点元素统一的焦点环 */
+.guji-section button:focus-visible,
+.guji-btn:focus-visible {
+  outline: 2px solid var(--cinnabar);
+  outline-offset: 2px;
+}
+
+/* 数值一律用等宽数字，避免跳动（统计卡/读秒共用） */
+.guji-num {
+  font-variant-numeric: tabular-nums;
+}

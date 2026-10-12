@@ -11,9 +11,22 @@
 |---|---|
 | `collation_cases_v2.json` | **当前版本**：9 段固定文本 + 期望要点（4 干净对照 / 4 人工注入 / 1 版本异文专项），目标 `collate_v2` |
 | `collation_cases_v1.json` | 上一版：8 段，目标 `collate_v1`。保留以便新旧 Prompt 对比，执行器用 `--cases` 指定 |
+| `analyze_cases_v1.json` | **F9 多维度分析**：3 段（2 名篇 + 1 信息不足残句），目标 `analyze_v1`。执行器按 `endpoint` 字段自动分流 |
 
 新用例集的 `prompt` 字段标明它对应的 Prompt 版本；换 Prompt 版本时把用例另存新文件（`_v3` …），
 旧版留在原地，这样"某个数字是哪套用例、哪个 Prompt 跑出来的"始终可追溯。
+
+## 两套用例的核对口径不同（别混着看）
+
+- **校勘用例**（`collation_cases_*.json`）：核对 `mustFind` / `minItems` / `maxItems` / `maxDropped`，
+  看的是"有没有检出、有没有误报"。
+- **分析用例**（`analyze_cases_v1.json`）：核对 `minJudged` / `maxJudged` / `mustJudge` /
+  `requireRelations` / `mustMentionEntities`，看的是**结构**——七维是否都给了、信息不足时
+  有没有硬判、知识图谱有没有边。它**不判"作者与年代对不对"**（有异说，需人工核验，
+  见 `docs/EVAL.md` §10）。
+  所有分析用例都会额外检查一条不变式：**作出判断的维度必须有 `evidence`，否则必须标存疑**——
+  这是 `analyze_v1` 的验收底线（无依据不得自称确定）。
+  `kind=thin` 的用例专门用来盯"信息不足却硬判"这种退化。
 
 ## 用例字段
 

@@ -26,6 +26,13 @@
     fake-dribble         SSE 持续吐字、间隔 1 秒       -> 期望**成功**（慢但在产出）
     fake-flaky           第一次静默、之后正常          -> 期望**成功**（段级重试接住）
     fake-error500        上游 500                    -> 期望 PROVIDER_MISCONFIGURED (500)
+    fake-analyze         分析固件（5 可用维度 + 2 占位 + 各类坏条目）-> 期望 droppedCount=7
+    fake-analyze-badjson 分析端点返回非 JSON           -> 期望 LLM_BAD_JSON (502)
+    fake-analyze-schemafail 分析端点 dimensions 不是数组 -> 期望 LLM_BAD_JSON (502)
+
+注意 `fake` 是**两端点通用**的：它按 user prompt 里的输出契约（`"dimensions"` / `"entities"`）
+判别这次调用来自 /analyze 还是 /collate，各返回对应固件。因此离线联调时
+`LLM_MODEL=fake` 一个名字就能把「校勘 + 译文 + 多维度分析 + 知识图谱」整条链路跑通。
 
 `fake-dribble` 与 `fake-stall` 的分工正是新超时判据的两面：**还在产出就不算失败，静默才算**。
 （判据见 PRD §4「文本分段提交」；旧版把"边吐字节但慢"也判成超时，那两个分支的期望是反的。）
@@ -44,6 +51,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 app = FastAPI(title="本地假模型端点（联调/测试专用）")
 
 _MODE_BY_MODEL_KEYWORD = (
+    # 分析端点的分支必须排在通用分支之前：`_mode_for` 取第一个命中的子串，
+    # "fake-analyze-badjson" 会同时命中 "analyze" 与 "badjson"，顺序决定用哪一支。
+    "analyze-badjson",
+    "analyze-schemafail",
+    "analyze",
     "badjson",
     "schemafail",
     "timeout",
@@ -155,11 +167,151 @@ FIXTURE_EXPECTED = {
 }
 
 
+# ---------------------------------------------------------------------------
+# POST /api/v1/analyze 的联调固件（F9）
+# ---------------------------------------------------------------------------
+# 联调样例文本：人工拼凑的测试串（**不是真实文献**），只为让实体/关系有落点。
+FIXTURE_ANALYZE_TEXT = "子曰：「学而时习之，不亦说乎？有朋自远方来，不亦乐乎？人不知而不愠，不亦君子乎？」"
+
+# 固件刻意混合「可用」与「必然被丢弃」的条目，用来一次性验证 analyze 的分支：
+#   dimensions：5 条可用 + 3 条应丢弃（未知 key / 重复 key / 缺 judgment）
+#              另有 2 个 key 未产出（edition、collation）→ 后端补 missing 占位，**不计丢弃**
+#   entities  ：2 条可用 + 2 条应丢弃（kind 不在枚举内 / 名字重复）
+#   relations ：1 条可用 + 2 条应丢弃（端点不在实体里 / 完全重复）
+# 期望 droppedCount = 3 + 2 + 2 = 7；dimensions 返回 7 条（5 可用 + 2 占位）。
+_FIXTURE_ANALYZE_DIMENSIONS = [
+    {
+        "key": "nature",
+        "judgment": "语录体，记言为主。",
+        "evidence": ["通篇以「子曰」引出孔子言论"],
+        "confidence": 0.9,
+        "uncertain": False,
+        "knowledgePoints": ["语录体是先秦诸子散文的最早形态", "篇名多取首章首句二字"],
+    },
+    {
+        "key": "dating",
+        "judgment": "通说成书于春秋末至战国初。",
+        "evidence": ["记孔子身后之事，非一时一人所成"],
+        # 百分数 72 -> 0.72，验证与 /collate 共用同一条归一化规则
+        "confidence": 72,
+        "uncertain": False,
+        "knowledgePoints": ["「论」读 lún，纂辑之义"],
+    },
+    {
+        "key": "authorship",
+        "judgment": "孔子弟子及再传弟子陆续纂辑，非孔子亲著。",
+        "evidence": ["《汉书·艺文志》著录为孔子弟子所记"],
+        "confidence": 0.88,
+        "uncertain": False,
+        "knowledgePoints": ["四书之一"],
+    },
+    {
+        # evidence 为空 -> 后端应强制 uncertain=True（无依据不许自称确定），但**不丢弃**
+        "key": "school",
+        "judgment": "属儒家。",
+        "evidence": [],
+        "confidence": 0.8,
+        "uncertain": False,
+        "knowledgePoints": ["儒家为先秦诸子学派之一"],
+    },
+    {
+        "key": "language",
+        "judgment": "用文言虚词，句式简短。",
+        "evidence": ["「不亦……乎」为常见反问句式"],
+        "confidence": 0.75,
+        "uncertain": False,
+        "knowledgePoints": [],
+    },
+    {
+        # 丢弃：key 不在七维之内
+        "key": "无关维度",
+        "judgment": "应被 schema 淘汰。",
+        "evidence": ["占位"],
+        "confidence": 0.9,
+    },
+    {
+        # 丢弃：nature 已出现过，重复
+        "key": "nature",
+        "judgment": "重复的 nature，应被丢弃。",
+        "evidence": ["占位"],
+        "confidence": 0.9,
+    },
+    {
+        # 丢弃：judgment 为空（min_length=1）
+        "key": "edition",
+        "judgment": "",
+        "evidence": ["占位"],
+        "confidence": 0.9,
+    },
+]
+
+_FIXTURE_ANALYZE_ENTITIES = [
+    {"name": "孔子", "kind": "人物", "note": "春秋末期思想家，儒家学派创始人"},
+    {"name": "《论语》", "kind": "著作", "note": "语录体散文集，四书之一"},
+    # 丢弃：kind 不在枚举内
+    {"name": "鲁国", "kind": "国家", "note": "应因 kind 不合法被丢弃"},
+    # 丢弃：与第 1 条重名
+    {"name": "孔子", "kind": "人物", "note": "重复实体，应被丢弃"},
+]
+
+_FIXTURE_ANALYZE_RELATIONS = [
+    {"source": "孔子", "target": "《论语》", "relation": "言论被辑录于"},
+    # 丢弃：端点「儒家」不在 entities 里（悬空边）
+    {"source": "孔子", "target": "儒家", "relation": "为学派创始人"},
+    # 丢弃：与第 1 条完全重复
+    {"source": "孔子", "target": "《论语》", "relation": "言论被辑录于"},
+]
+
+_FIXTURE_ANALYZE_BODY = json.dumps(
+    {
+        "dimensions": _FIXTURE_ANALYZE_DIMENSIONS,
+        "entities": _FIXTURE_ANALYZE_ENTITIES,
+        "relations": _FIXTURE_ANALYZE_RELATIONS,
+    },
+    ensure_ascii=False,
+)
+
+FIXTURE_ANALYZE_EXPECTED = {
+    "sampleText": FIXTURE_ANALYZE_TEXT,
+    # 七个 key 全部返回（5 条模型产出 + 2 条 missing 占位），顺序固定
+    "dimensionKeys": [
+        "nature",
+        "dating",
+        "authorship",
+        "school",
+        "edition",
+        "language",
+        "collation",
+    ],
+    "missingKeys": ["edition", "collation"],
+    "uncertainKeys": ["school"],
+    "normalizedConfidence": {"dating": 0.72},
+    "entityNames": ["孔子", "《论语》"],
+    "relationCount": 1,
+    "dropped": 7,
+    "droppedReason": "维度 3（未知 key/重复 key/缺 judgment）+ 实体 2（kind 不合法/重名）+ 关系 2（悬空边/重复）",
+}
+
+
 def _mode_for(model: str) -> str:
     for keyword in _MODE_BY_MODEL_KEYWORD:
         if keyword in model:
             return keyword
     return "ok"
+
+
+def _looks_like_analyze(body: dict) -> bool:
+    """判断这次调用来自 /analyze 还是 /collate：看 user prompt 要的输出结构。
+
+    比"按模型名区分"更贴近真实：真实部署里两个端点用同一个模型，
+    只有 Prompt 不同。判别依据取 Prompt 里独有的字段名，足够稳。
+    """
+    for message in reversed(body.get("messages", [])):
+        if message.get("role") != "user":
+            continue
+        content = str(message.get("content", ""))
+        return '"dimensions"' in content or '"entities"' in content
+    return False
 
 
 def _envelope(content: str, model: str) -> dict:
@@ -226,6 +378,12 @@ async def chat_completions(request: Request):
     # 这个用例也总是「一次失败 + 一次成功」，不依赖跨用例的执行顺序。
     should_stall = mode == "stall" or (mode == "flaky" and _CALL_COUNTS[mode] % 2 == 1)
 
+    # `LLM_MODEL=fake` 要能同时服务 /collate 与 /analyze：两个端点的 system prompt 不同，
+    # 按 prompt 里是否要求 dimensions/entities 来判别用哪份固件。
+    # 这样离线联调时一个模型名就能把整条链路（含新端点）跑通，不必来回改环境变量。
+    if mode == "ok" and _looks_like_analyze(body):
+        return JSONResponse(_envelope(_FIXTURE_ANALYZE_BODY, model))
+
     if mode == "timeout":
         await asyncio.sleep(120)
     if mode == "error500":
@@ -237,6 +395,14 @@ async def chat_completions(request: Request):
         return JSONResponse(
             _envelope(json.dumps({"items": "不是数组", "translation": ""}, ensure_ascii=False), model)
         )
+    # --- POST /api/v1/analyze 的两个降级分支（与 /collate 形式一致，只是信封字段不同）---
+    if mode == "analyze-badjson":
+        return JSONResponse(_envelope("这不是 JSON，只是一段散文。", model))
+    if mode == "analyze-schemafail":
+        # dimensions 应是数组，这里给了字符串
+        return JSONResponse(_envelope(json.dumps({"dimensions": "不是数组"}, ensure_ascii=False), model))
+    if mode == "analyze":
+        return JSONResponse(_envelope(_FIXTURE_ANALYZE_BODY, model))
     if should_stall:
         return StreamingResponse(_stall_stream(model), media_type="text/event-stream")
     if mode == "dribble":
@@ -246,7 +412,11 @@ async def chat_completions(request: Request):
 
 @app.get("/v1/health")
 async def fake_health():
-    return {"status": "ok", "fixture": FIXTURE_EXPECTED}
+    return {
+        "status": "ok",
+        "fixture": FIXTURE_EXPECTED,
+        "analyzeFixture": FIXTURE_ANALYZE_EXPECTED,
+    }
 
 
 def main() -> None:

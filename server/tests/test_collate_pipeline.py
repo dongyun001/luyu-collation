@@ -9,12 +9,9 @@
 from __future__ import annotations
 
 import asyncio
-import socket
-import threading
 import time
 
 import pytest
-import uvicorn
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -24,37 +21,11 @@ from server.routers.collate import _to_collation_items
 from server.services.llm import complete_json, extract_json_object
 from server.services.prompt_loader import PromptError, load_prompt, render
 from server.tests.fake_llm_provider import FIXTURE_SAMPLE_TEXT
-from server.tests.fake_llm_provider import app as fake_app
 from server.utils import rate_limit
 from server.utils.errors import ApiError
 from server.utils.schemas import MAX_TEXT_LEN, ModelItem, ModelOutputEnvelope
 
-FAKE_PORT = 3099
-FAKE_BASE_URL = f"http://127.0.0.1:{FAKE_PORT}/v1"
-
-
-def _wait_for_port(port: int, timeout: float = 15.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        with socket.socket() as sock:
-            sock.settimeout(0.2)
-            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                return
-        time.sleep(0.05)
-    raise RuntimeError(f"假模型端点未在 {timeout}s 内就绪（端口 {port}）")
-
-
-@pytest.fixture(scope="session")
-def fake_provider() -> str:
-    """在后台线程里跑一个本地假模型，返回其 base_url。"""
-    config = uvicorn.Config(fake_app, host="127.0.0.1", port=FAKE_PORT, log_level="warning")
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    _wait_for_port(FAKE_PORT)
-    yield FAKE_BASE_URL
-    server.should_exit = True
-    thread.join(timeout=5)
+# `fake_provider`（本地假模型端点）定义在 conftest.py，本模块与 test_analyze_pipeline.py 共用一份。
 
 
 @pytest.fixture()

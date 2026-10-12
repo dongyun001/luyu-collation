@@ -12,6 +12,7 @@
     "format": "oxfmt src/"
   },
   "dependencies": {
+    "echarts": "^6.1.0",
     "lottie-web": "^5.13.0",
     "opencc-js": "^1.4.2",
     "pinia": "^4.0.3",

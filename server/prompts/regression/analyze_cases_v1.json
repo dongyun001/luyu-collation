@@ -1,0 +1,52 @@
+{
+  "version": "v1",
+  "prompt": "analyze_v1",
+  "endpoint": "POST /api/v1/analyze",
+  "description": "F9 多维度文献分析的 Prompt 回归集。用于 analyze_v1 改版后的效果对比：看它是否仍按七维输出、是否遵守「无依据不得自称确定」这条不变式、以及在信息不足时是否拒绝硬判。与 docs/EVAL.md §10 的核验口径配合使用：本回归集只做**结构级**检查，不判「结论对不对」（那是人工核验的事）。",
+  "datasetNotes": [
+    "文本均为公共版权古籍通行本短选段，只作 Prompt 回归输入，不作校勘底本。",
+    "kind=known 的用例是特征鲜明的名篇选段，用来观察七维是否都能给出有依据的判断。",
+    "kind=thin 的用例是信息量极低的残句，用来观察模型**是否拒绝硬判**——这是本 Prompt 最该守住的一条。",
+    "所有用例都会检查不变式：作出判断（missing=false）的维度必须有 evidence，否则必须 uncertain=true。",
+    "本回归集**不检查**结论的正确性（作者、年代有异说），那部分按 docs/EVAL.md §10 人工抽样核验。"
+  ],
+  "cases": [
+    {
+      "id": "ana-001",
+      "kind": "known",
+      "origin": "《论语》学而篇选段",
+      "source": "子曰：「学而时习之，不亦说乎？有朋自远方来，不亦乐乎？人不知而不愠，不亦君子乎？」有子曰：「其为人也孝弟，而好犯上者，鲜矣。」",
+      "expected": {
+        "minJudged": 6,
+        "maxDropped": 1,
+        "mustJudge": [{ "key": "authorship", "contains": "孔子" }],
+        "mustMentionEntities": ["孔子"],
+        "notes": "名篇，七维几乎都应有依据；authorship 必须点出「孔子」且理想状态是说明非亲著。"
+      }
+    },
+    {
+      "id": "ana-002",
+      "kind": "known",
+      "origin": "《庄子》逍遥游选段",
+      "source": "北冥有鱼，其名为鲲。鲲之大，不知其几千里也。化而为鸟，其名为鹏。鹏之背，不知其几千里也。怒而飞，其翼若垂天之云。",
+      "expected": {
+        "minJudged": 5,
+        "maxDropped": 1,
+        "requireRelations": true,
+        "notes": "寓言体特征明显；至少要产出一条关系，否则知识图谱只剩孤立节点（F11 就白做了）。"
+      }
+    },
+    {
+      "id": "ana-003",
+      "kind": "thin",
+      "origin": "人工拼凑的极短残句（非真实文献）",
+      "source": "甲乙丙丁戊己。",
+      "expected": {
+        "minJudged": 0,
+        "maxJudged": 3,
+        "maxDropped": 1,
+        "notes": "信息量极低：不该有六个以上维度被「判」出来。理想结果是多数维度判为未能判断或存疑——这正是 analyze_v1 的验收点，宁可空白不要编。"
+      }
+    }
+  ]
+}

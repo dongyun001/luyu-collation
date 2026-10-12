@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import get_settings
-from .routers import collate, health
+from .routers import analyze, collate, health
 from .utils.errors import INTERNAL_ERROR, INVALID_REQUEST, ApiError, error_body
 
 logger = logging.getLogger("guji.server")
@@ -45,6 +45,7 @@ app.add_middleware(
 
 app.include_router(health.router, prefix=API_PREFIX, tags=["health"])
 app.include_router(collate.router, prefix=API_PREFIX, tags=["collate"])
+app.include_router(analyze.router, prefix=API_PREFIX, tags=["analyze"])
 
 
 @app.exception_handler(ApiError)

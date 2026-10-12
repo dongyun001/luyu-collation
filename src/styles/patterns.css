@@ -1,0 +1,89 @@
+/**
+ * 自绘纹样（docs/VISUAL.md §6）。
+ *
+ * 为什么是内联 SVG data-URI 而不是图片文件：
+ *  ① 离线可演示（演示当天断网也不掉图）；② 无版权风险（不引任何第三方素材）；
+ *  ③ 不触碰赛规匿名红线（不含任何机构名/Logo）；④ 体积为零（不新增静态资源）。
+ *
+ * 强度纪律：所有纹样透明度 ≤ 6%，只做"纸感"，不得抢正文对比度。
+ */
+
+:root {
+  /* 云纹：古籍页面的主纹样，用于页面底与 hero */
+  --pattern-cloud: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='70' viewBox='0 0 140 70'><g fill='none' stroke='%238b1a1a' stroke-width='1.1' stroke-linecap='round'><path d='M10 54c0-9 8-16 17-16 2-9 10-15 19-15 10 0 19 7 21 17 8 0 14 6 14 14'/><path d='M46 22c3-4 8-6 13-5'/><circle cx='27' cy='38' r='2'/><circle cx='46' cy='23' r='2'/></g></svg>");
+
+  /* 回纹（雷纹）：用于区块分隔条与卡片天头 */
+  --pattern-fret: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><path d='M4 4h32v32H12V12h16v16' fill='none' stroke='%238b1a1a' stroke-width='1.2'/></svg>");
+
+  /* 竹简竖纹：用于 hero 与"原文"面板底 */
+  --pattern-slip: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='40' viewBox='0 0 28 40'><g stroke='%238b1a1a' stroke-width='1'><line x1='13' y1='0' x2='13' y2='40'/><line x1='15' y1='0' x2='15' y2='40'/></g></svg>");
+
+  /* 卷轴角饰（如意云头）：用于卡片四角 */
+  --ornament-corner: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'><g fill='none' stroke='%238b1a1a' stroke-width='1.6'><path d='M2 46V10a8 8 0 0 1 8-8h36'/><path d='M10 46V18a8 8 0 0 1 8-8h28'/></g></svg>");
+}
+
+/* ================= 用法一：整块区域打底纹 ================= */
+/* 用 isolation: isolate + z-index:-1 把纹样压到内容之下，
+   这样就**不用**去动子元素的 position/z-index，避免影响既有布局。 */
+.guji-paper {
+  position: relative;
+  isolation: isolate;
+}
+
+.guji-paper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--pattern-cloud);
+  background-size: 140px 70px;
+  opacity: 0.06;
+  pointer-events: none;
+}
+
+.guji-paper--slips::before {
+  background-image: var(--pattern-slip);
+  background-size: 28px 40px;
+  opacity: 0.05;
+}
+
+.guji-paper--fret::before {
+  background-image: var(--pattern-fret);
+  background-size: 40px 40px;
+  opacity: 0.04;
+}
+
+/* ================= 用法二：卷轴卡四角角饰 ================= */
+.guji-scroll-frame::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  pointer-events: none;
+  /* 四个角各放一枚角饰：CSS 的 multiple backgrounds 按层配对，
+     所以 image / position / repeat 都要列 4 份（只列一份会只画出左上角）。 */
+  background-image: var(--ornament-corner), var(--ornament-corner), var(--ornament-corner),
+    var(--ornament-corner);
+  background-repeat: no-repeat;
+  background-size: 22px 22px;
+  background-position: left top, right top, left bottom, right bottom;
+  opacity: 0.12;
+}
+
+/* 分隔用的回纹细条 */
+.guji-fret-divider {
+  height: 10px;
+  background-image: var(--pattern-fret);
+  background-size: 20px 20px;
+  opacity: 0.12;
+  border: none;
+  margin: var(--space-4) 0;
+}
+
+/* 打印与降低动效偏好下，纹样一律撤掉（纸感可省，可读性不可让） */
+@media print {
+  .guji-paper::before,
+  .guji-scroll-frame::after,
+  .guji-fret-divider {
+    display: none;
+  }
+}

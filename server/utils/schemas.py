@@ -17,6 +17,49 @@ MAX_TEXT_LEN = 5000
 CollationType = Literal["讹字", "衍文", "脱文", "通假", "异文"]
 COLLATION_TYPES: tuple[str, ...] = ("讹字", "衍文", "脱文", "通假", "异文")
 
+# F9 多维度文献分析（API.md §6）：七个维度 key 固定，顺序即雷达图轴序（docs/VISUAL.md §4.1）
+DIMENSION_KEYS: tuple[str, ...] = (
+    "nature",
+    "dating",
+    "authorship",
+    "school",
+    "edition",
+    "language",
+    "collation",
+)
+DIMENSION_LABELS: dict[str, str] = {
+    "nature": "文献性质",
+    "dating": "成书年代",
+    "authorship": "作者与编纂",
+    "school": "学派与思想",
+    "edition": "版本与流传",
+    "language": "语言文字特征",
+    "collation": "校勘要点",
+}
+
+# 知识图谱节点分类（docs/VISUAL.md §4.3）
+ENTITY_KINDS: tuple[str, ...] = ("人物", "著作", "学派", "地名", "职官", "年代")
+
+# 长文本抽样参数（API.md §6）：超过阈值取「首段 + 尾段」，并在响应里如实标注 sampled
+ANALYZE_SAMPLE_THRESHOLD = 2000
+ANALYZE_SAMPLE_HEAD = 1200
+ANALYZE_SAMPLE_TAIL = 600
+
+
+def normalize_confidence(value: float) -> float:
+    """把模型给的置信度归一化并做范围校验（collate 与 analyze 共用同一条规则）。
+
+    容忍模型用百分数（95）而非小数（0.95）作答——实测两种写法都会出现；
+    其余越界一律判为不合契约（调用方负责丢弃与计数）。
+    """
+    if not math.isfinite(value):
+        raise ValueError("confidence 必须是有限数值")
+    if 1.0 < value <= 100.0:
+        value = value / 100.0
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"confidence 越界：{value}")
+    return value
+
 
 # ---------------------------------------------------------------------------
 # 请求
@@ -75,13 +118,7 @@ class ModelItem(BaseModel):
     @classmethod
     def _normalize_confidence(cls, value: float) -> float:
         """容忍模型用百分数（95）而非小数（0.95）作答，其余越界一律判为不合契约。"""
-        if not math.isfinite(value):
-            raise ValueError("confidence 必须是有限数值")
-        if 1.0 < value <= 100.0:
-            value = value / 100.0
-        if not 0.0 <= value <= 1.0:
-            raise ValueError(f"confidence 越界：{value}")
-        return value
+        return normalize_confidence(value)
 
     @model_validator(mode="after")
     def _suggested_must_differ_from_original(self) -> "ModelItem":
@@ -146,3 +183,141 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+# ---------------------------------------------------------------------------
+# F9 多维度文献分析（API.md §6）
+# ---------------------------------------------------------------------------
+class AnalyzeRequest(BaseModel):
+    """POST /analyze 请求体。
+
+    `dimensions` 可省略（默认全 7 维）；传未知 key 会在这里被拒，
+    由 main.py 的统一处理器转成 400 / INVALID_REQUEST（而不是 422）。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    text: str
+    dimensions: list[str] | None = None
+
+    @field_validator("dimensions")
+    @classmethod
+    def _validate_dimensions(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return list(DIMENSION_KEYS)
+        unknown = [key for key in value if key not in DIMENSION_KEYS]
+        if unknown:
+            raise ValueError(f"未知的维度 key：{'、'.join(unknown)}")
+        if not value:
+            raise ValueError("dimensions 不能是空数组（省略即取全部 7 维）")
+        return value
+
+
+class ModelDimension(BaseModel):
+    """模型输出契约里的单个维度判断。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    key: str
+    judgment: str = Field(min_length=1)
+    evidence: list[str] = Field(default_factory=list)
+    confidence: float
+    uncertain: bool = False
+    knowledgePoints: list[str] = Field(default_factory=list)
+
+    @field_validator("key")
+    @classmethod
+    def _validate_key(cls, value: str) -> str:
+        if value not in DIMENSION_KEYS:
+            raise ValueError(f"未知的维度 key：{value}")
+        return value
+
+    @field_validator("confidence")
+    @classmethod
+    def _normalize_confidence(cls, value: float) -> float:
+        return normalize_confidence(value)
+
+    @model_validator(mode="after")
+    def _no_evidence_means_uncertain(self) -> "ModelDimension":
+        """无依据不许自称确定（API.md §6 字段约束）。
+
+        这里**不丢弃**而是降级为「存疑」：本 Prompt 的一贯主张是"不确定就降置信、
+        标存疑"，而不是把话咽回去。丢弃会让雷达少一根轴，反而更失真。
+        """
+        if not self.evidence:
+            self.uncertain = True
+        return self
+
+
+class ModelEntity(BaseModel):
+    """模型输出契约里的实体（知识图谱节点）。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(min_length=1)
+    kind: str
+    note: str = ""
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_kind(cls, value: str) -> str:
+        if value not in ENTITY_KINDS:
+            raise ValueError(f"未知的实体类别：{value}")
+        return value
+
+
+class ModelRelation(BaseModel):
+    """模型输出契约里的关系（知识图谱边）。端点是否存在由路由校验。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source: str = Field(min_length=1)
+    target: str = Field(min_length=1)
+    relation: str = ""
+
+
+class ModelAnalyzeEnvelope(BaseModel):
+    """分析输出的信封校验：各列表用 list[Any] 逐项校验，坏一条不废整次（同 collate）。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    dimensions: list[Any]
+    entities: list[Any] = Field(default_factory=list)
+    relations: list[Any] = Field(default_factory=list)
+
+
+class DimensionScore(BaseModel):
+    """对外输出的维度判断（missing 为占位语义，见 API.md §6）。"""
+
+    key: str
+    label: str
+    judgment: str
+    evidence: list[str]
+    confidence: float
+    uncertain: bool
+    missing: bool
+    knowledgePoints: list[str]
+
+
+class AnalyzeEntity(BaseModel):
+    name: str
+    kind: str
+    note: str
+
+
+class AnalyzeRelation(BaseModel):
+    source: str
+    target: str
+    relation: str
+
+
+class AnalyzeResponse(BaseModel):
+    requestId: str
+    model: str
+    elapsedMs: int
+    analyzedChars: int
+    sampled: bool
+    dimensions: list[DimensionScore]
+    entities: list[AnalyzeEntity]
+    relations: list[AnalyzeRelation]
+    droppedCount: int
