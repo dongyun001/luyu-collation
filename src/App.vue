@@ -58,7 +58,7 @@
 body {
   margin: 0;
   font-family: 'Noto Serif SC', 'SimSun', serif; /* 宋体 */
-  background-color: #fdfbf7; /* 宣纸底色 */
+  background-color: var(--paper); /* 宣纸底色 */
   color: #333;
 }
 
@@ -70,15 +70,15 @@ body {
   z-index: 1;
 }
 
-/* 纸纹层：整页的云纹底，固定在视口，透明度压到 6% 以内（docs/VISUAL.md §6） */
+/* 纸纹层：整页的云纹底，固定在视口，深浅由 token 统一控制（见 styles/patterns.css :root） */
 .paper-layer {
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
   background-image: var(--pattern-cloud, none);
-  background-size: 140px 70px;
-  opacity: 0.06;
+  background-size: 96px 48px;
+  opacity: var(--pattern-opacity-page, 0.06);
 }
 
 @media print {
@@ -90,7 +90,7 @@ body {
 /* 顶部导航样式 */
 .main-header {
   height: 70px;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(252, 248, 238, 0.94);
   backdrop-filter: blur(2px);
   border-bottom: 1px solid #e6e2d8;
   display: flex;

@@ -13,10 +13,11 @@
         <button class="btn-toggle" :class="{ active: charMode === 'traditional' }" @click="charMode = 'traditional'">繁体</button>
       </div>
       <div class="tool-spacer"></div>
-      <button class="btn-toggle btn-analysis" title="打开可视化看板：多维分析、图谱与统计图" @click="goAnalysis">
-        📊 分析看板
-      </button>
-      <button class="btn-toggle" @click="goProjects">📚 项目列表</button>
+      <!-- 完成时落一枚章（一次性动效）。放这里而不是结果面板里：
+           面板天头是 z-index:10，绝对定位的印章会被它盖住（实测过，等于白做） -->
+      <SealStamp v-if="store.isReady" text="校" :size="26" placement="toolbar" />
+      <!-- 分析看板 / 项目列表 的入口已由顶部导航提供，这里不再重复放一份：
+           两个入口指向同一页面既是冗余，也会在 800px 宽的笔记本上把工具栏挤到溢出 -->
       <button v-if="hasAnyState" class="btn-toggle" @click="restart">重新开始</button>
     </div>
 
@@ -29,20 +30,12 @@
         <h3 class="state-title">正在调用大模型校勘…</h3>
         <!-- 读秒进度条：条宽是**预估**（真实进度拿不到），但秒数是如实的，
              目的是让等待"看得出在动"，不像卡死。 -->
-        <div
-          class="progress-track"
-          role="progressbar"
+        <ProgressMeter
           aria-label="校勘进度"
-          :aria-valuenow="store.progressPercent"
-          aria-valuemin="0"
-          aria-valuemax="100"
-        >
-          <div class="progress-fill" :style="{ width: `${store.progressPercent}%` }"></div>
-        </div>
-        <p class="progress-readout">
-          已用时 <strong>{{ store.elapsedSeconds }}</strong> 秒
-          <template v-if="store.progressText"> · {{ store.progressText }}</template>
-        </p>
+          :percent="store.progressPercent"
+          :seconds="store.elapsedSeconds"
+          :label="store.progressText"
+        />
         <p class="state-text">
           长文本按句读分段提交，每段返回即显示；上游只要还在产出就不会被判超时。
         </p>
@@ -71,10 +64,15 @@
     <template v-else>
       <!-- 分段进度 / 部分失败提示：有结果时也保留在工作台上方 -->
       <div v-if="store.isLoading" class="progress-banner">
-        <span class="spinner-inline">⏳</span>
-        正在逐段校勘…{{ store.progressText }}
-        <span class="banner-timer">已用时 {{ store.elapsedSeconds }} 秒</span>
-        （已收到 {{ store.items.length }} 条建议，可先查看处理）
+        <!-- 条形与计数必须同屏：只有文字时用户看不到"已完成"推进，只有条形时又不知道走到哪一段 -->
+        <ProgressMeter
+          compact
+          aria-label="分段校勘进度"
+          :percent="store.progressPercent"
+          :seconds="store.elapsedSeconds"
+          :label="store.progressText"
+          :hint="`正在逐段校勘…已收到 ${store.items.length} 条建议，可先查看处理`"
+        />
       </div>
       <!-- 部分失败：不盖住已到货的结果，给一键重试；已到货的照常可采纳、可导出 -->
       <div v-else-if="store.hasFailures" class="progress-banner is-error">
@@ -92,7 +90,7 @@
       <!-- 核心双栏对照区 -->
       <div class="comparison-grid">
         <!-- 左侧：原文展示区 -->
-        <div class="panel source-panel">
+        <div class="panel source-panel guji-texture">
           <div class="panel-header">
             <div class="header-left">
               <span class="title-bar"></span>
@@ -122,7 +120,7 @@
         </div>
 
         <!-- 右侧：AI校勘结果区 -->
-        <div class="panel result-panel">
+        <div class="panel result-panel guji-texture">
           <div class="panel-header">
             <div class="header-left">
               <span class="title-bar"></span>
@@ -133,7 +131,12 @@
               <button class="btn-outline btn-success" :disabled="!store.acceptableCount" @click="store.acceptAll()">
                 全部采纳{{ store.acceptableCount ? `（${store.acceptableCount}）` : '' }}
               </button>
-              <button class="btn-outline btn-default" :disabled="!store.pendingItems.length" @click="store.rejectAll()">
+              <button
+                class="btn-outline btn-default"
+                :disabled="!store.rejectableCount"
+                :title="store.rejectableCount ? '把所有条目退回原文' : '已全部退回原文'"
+                @click="store.rejectAll()"
+              >
                 一键还原
               </button>
             </div>
@@ -178,10 +181,11 @@
             <template v-else>
               <!-- 高置信建议：参与「全部采纳」 -->
               <div
-                v-for="item in renderedHighConfidence"
-                :key="item.id"
+                v-for="(item, index) in renderedHighConfidence"
+                :key="itemKey(item)"
                 class="collation-card"
                 :class="item.status"
+                :style="{ '--card-delay': `${cardInDelay(index)}ms` }"
               >
                 <div class="card-head">
                   <span class="type-badge" :class="typeClass(item.type)">{{ item.type }}</span>
@@ -213,10 +217,11 @@
                 </button>
                 <template v-if="showLowConfidence">
                   <div
-                    v-for="item in renderedLowConfidence"
-                    :key="item.id"
+                    v-for="(item, index) in renderedLowConfidence"
+                    :key="itemKey(item)"
                     class="collation-card low"
                     :class="item.status"
+                    :style="{ '--card-delay': `${cardInDelay(index)}ms` }"
                   >
                     <div class="card-head">
                       <span class="type-badge" :class="typeClass(item.type)">{{ item.type }}</span>
@@ -297,6 +302,8 @@ import OpenCC from 'opencc-js'
 
 import TranslatorWidget from '@/components/TranslatorWidget.vue'
 import FilterBar from '@/components/FilterBar.vue'
+import ProgressMeter from '@/components/ProgressMeter.vue'
+import SealStamp from '@/components/SealStamp.vue'
 import StatsCards from '@/components/StatsCards.vue'
 import { LOW_CONFIDENCE_THRESHOLD, useCollationStore } from '@/stores/collation'
 import { overallStats } from '@/utils/chartData'
@@ -311,6 +318,22 @@ const showLowConfidence = ref(false)
 const exportNotice = ref(null)
 
 const lowConfidenceThreshold = LOW_CONFIDENCE_THRESHOLD
+
+/**
+ * 卡片渲染用的**稳定键**。不能用 `item.id`：`mergeCollationItems` 每次分段合并都会
+ * 重新编号 id（后端每段都从 1 开始编号），用 id 当 key 会让整列卡片在每次到货时重新挂载——
+ * 后果不只是浪费，错峰入场动画会跟着反复重放，看起来像闪屏。
+ * 四元组正是 store 去重用的那套（类型/原文/建议/偏移），跨合并稳定。
+ */
+const itemKey = (item) => `${item.type}:${item.original}:${item.suggested}:${item.offset}`
+
+/**
+ * 卡片入场错峰延迟：第 1 张不延迟，之后每张 +40ms，上限 12 张（480ms）。
+ * 上限是为了"后来才到货的那批"不会等太久——服务端是逐段返回的，
+ * 结果列表会一次次变长，越靠后的卡片如果按真实序号无限累加，
+ * 看起来就像迟迟不出来。
+ */
+const cardInDelay = (index) => Math.min(index, 12) * 40
 
 // 两个方向各建一个转换器：'cn'→'tw' 是简转繁，'tw'→'cn' 是繁转简。
 // 只建前者的话，「简体」模式等于没转换——粘贴繁体原文时点「简体」会毫无反应。
@@ -429,14 +452,6 @@ function restart() {
   store.reset()
   router.push('/')
 }
-
-function goAnalysis() {
-  router.push('/analysis')
-}
-
-function goProjects() {
-  router.push('/projects')
-}
 </script>
 
 <style scoped>
@@ -450,20 +465,40 @@ function goProjects() {
      加载/错误状态屏也会偏出可视区。 */
   height: calc(100vh - 70px - 1px - 80px);
   min-height: 480px;
-  background: #f7f7f7;
+  background: var(--surface-sunken);
 }
 
 .toolbar {
   padding: 10px 20px;
-  background: #fff;
+  background: var(--surface-sunken);
   border-bottom: 1px solid #eee;
   display: flex;
-  gap: 20px;
+  gap: 10px;
   align-items: center;
   z-index: 20;
+  /* 800px 宽（小组的笔记本）下按钮曾被挤到文字折行，这里一律不折、不压缩 */
+  flex-wrap: nowrap;
+  overflow-x: auto;
 }
 
 .tool-spacer { flex: 1; }
+
+/* 排版/字体这两组：之前没定义样式，label 与按钮在窄屏会各自折行，
+   把工具栏撑成两行（实测 800px 宽时高 79px），连带把下面的面板顶下去。
+   固定成单行、不参与压缩。 */
+.tool-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.tool-group .label {
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
 
 /* 分段进度 / 部分失败横条：有结果时也显示在工作台上方 */
 .progress-banner {
@@ -480,7 +515,6 @@ function goProjects() {
   border-bottom-color: #f0d9d6;
 }
 .progress-banner .banner-hint { color: #7a5b1e; margin-left: 8px; }
-.progress-banner .banner-timer { margin: 0 6px; font-variant-numeric: tabular-nums; }
 .progress-banner .banner-btn {
   margin-left: 10px;
   padding: 2px 10px;
@@ -493,38 +527,18 @@ function goProjects() {
 }
 .progress-banner .banner-btn:hover:not(:disabled) { background: #8a2b22; color: #fff; }
 .progress-banner .banner-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.spinner-inline { display: inline-block; animation: pulse 1.6s ease-in-out infinite; }
+/* 读秒进度条的样式已在 styles/theme.css（ProgressMeter 组件专用，三处共用） */
 
-/* ================= 读秒进度条（加载屏） ================= */
-.progress-track {
-  width: min(360px, 70vw);
-  height: 8px;
-  margin-top: 18px;
-  border-radius: 4px;
-  background: #ececec;
-  overflow: hidden;
-}
-.progress-fill {
-  height: 100%;
-  border-radius: 4px;
-  background: #8b1a1a;
-  /* 秒数整秒跳，宽度用过渡抹平，看起来是连续推进而不是一格一格跳 */
-  transition: width 0.9s linear;
-}
-.progress-readout {
-  margin: 10px 0 0;
-  font-size: 14px;
-  color: #8b1a1a;
-  font-variant-numeric: tabular-nums;
-}
-
+/* ================= 状态屏（加载 / 失败 / 未提交） ================= */
 .btn-toggle {
-  padding: 4px 12px;
+  padding: 4px 10px;
   border: 1px solid #ddd;
   background: #fff;
   border-radius: 4px;
   cursor: pointer;
   font-size: 14px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .btn-toggle.active {
@@ -534,16 +548,6 @@ function goProjects() {
 }
 
 /* 跳转看板/项目列表的入口按钮：描边样式，与排版/字体切换区分开 */
-.btn-analysis {
-  border-color: #8b1a1a;
-  color: #8b1a1a;
-}
-
-.btn-analysis:hover {
-  background: #8b1a1a;
-  color: #fff;
-}
-
 /* 统计 + 筛选面板（F12）：固定在结果列表上方，不随列表滚动 */
 .filter-panel {
   flex-shrink: 0;
@@ -610,7 +614,7 @@ function goProjects() {
 }
 
 .panel {
-  background: #fff;
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -621,14 +625,16 @@ function goProjects() {
 .result-panel { flex: 1; min-width: 400px; }
 
 .panel-header {
-  padding: 15px 20px;
+  padding: 12px 16px;
   border-bottom: 1px solid #eee;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #fff;
+  gap: 10px;
+  background: var(--surface-sunken);
   z-index: 10;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .header-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -644,7 +650,7 @@ function goProjects() {
 
 .title-text { font-weight: bold; color: #333; }
 .tag-ai { font-size: 12px; color: #999; }
-.tag-count { font-size: 12px; color: #8b1a1a; background: #fdf1f1; padding: 2px 8px; border-radius: 10px; }
+.tag-count { font-size: 12px; color: #8b1a1a; background: #fdf1f1; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
 
 /* ================= 原文区 ================= */
 .text-content {
@@ -733,15 +739,17 @@ function goProjects() {
 .text-content::-webkit-scrollbar-thumb:hover { background: #888; }
 
 /* ================= 校勘结果区 ================= */
-.header-actions { display: flex; gap: 10px; }
+.header-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
 .btn-outline {
-  padding: 6px 16px;
+  padding: 6px 14px;
   border-radius: 4px;
   border: 1px solid #ddd;
   cursor: pointer;
   background: #fff;
   transition: all 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .btn-outline:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -758,7 +766,7 @@ function goProjects() {
   padding: 8px 20px;
   font-size: 12px;
   color: #888;
-  background: #fafafa;
+  background: var(--surface-sunken);
   border-bottom: 1px solid #f0f0f0;
   flex-shrink: 0;
 }
@@ -786,7 +794,22 @@ function goProjects() {
   border: 1px solid #e6e2d8;
   border-radius: 6px;
   padding: 15px;
-  background: #fffcfc;
+  background: var(--surface-veil);
+  /* 入场：错峰上浮淡入（延迟由模板里的 --card-delay 给）。
+     键用内容稳定键（itemKey），所以分段合并时已有卡片不会重新挂载、不会重放动画。 */
+  animation: cardIn 0.32s ease-out both;
+  animation-delay: var(--card-delay, 0ms);
+}
+
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .collation-card.low { background: #fbfbfb; border-style: dashed; }
@@ -863,7 +886,7 @@ function goProjects() {
 .low-confidence-group { display: flex; flex-direction: column; gap: 15px; }
 .group-toggle {
   text-align: left;
-  background: #fafafa;
+  background: var(--surface-sunken);
   border: 1px dashed #ddd;
   border-radius: 6px;
   padding: 10px 14px;
@@ -876,8 +899,9 @@ function goProjects() {
 
 /* ================= 底部功能区 ================= */
 .bottom-section {
-  height: 220px;
-  background: #fff;
+  /* 小屏（如 800x600 的笔记本）下 220px 会把结果列表挤没，改成随视口高度伸缩 */
+  height: clamp(140px, 28vh, 220px);
+  background: var(--surface);
   border-top: 1px solid #eee;
   flex-shrink: 0;
   display: flex;
@@ -889,7 +913,7 @@ function goProjects() {
   align-items: center;
   padding: 0 20px;
   border-bottom: 1px solid #eee;
-  background: #fafafa;
+  background: var(--surface-sunken);
 }
 
 .tab-item {
@@ -905,7 +929,7 @@ function goProjects() {
   color: #8b1a1a;
   font-weight: bold;
   border-bottom-color: #8b1a1a;
-  background: #fff;
+  background: var(--surface);
 }
 
 .tab-content {

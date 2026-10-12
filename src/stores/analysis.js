@@ -17,6 +17,7 @@ import { defineStore } from 'pinia'
 
 import { ApiError, NETWORK_ERROR, analyzeText } from '@/api/client'
 import { collectKnowledgePoints } from '@/utils/chartData'
+import { asymptoticPercent, createElapsedTicker } from '@/utils/progressMeter'
 
 /** 错误码 -> 给用户的处理建议（与 collation store 同一套措辞，只留本端点会用到的几个）。 */
 const ERROR_HINTS = {
@@ -61,6 +62,14 @@ export const useAnalysisStore = defineStore('analysis', () => {
   /** 本次分析对应的原文内容（视图据此判断"分析结果是不是当前这篇的"）。 */
   const analyzedText = ref('')
 
+  /**
+   * 读秒秒表与进度估算。与校勘共用 `utils/progressMeter.js` 那一份实现——
+   * 分析是**单次**调用、没有分段可比，所以这里只用"按时间渐近"这一项
+   * （口径与校勘一致：条宽是预估，秒数如实显示）。
+   */
+  const { seconds: elapsedSeconds, start: startTicking, stop: stopTicking } = createElapsedTicker()
+  const progressPercent = computed(() => asymptoticPercent(elapsedSeconds.value, 0))
+
   // --- getters ---
   const isLoading = computed(() => status.value === 'loading')
   const isReady = computed(() => status.value === 'ready')
@@ -95,6 +104,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     const runId = activeRun
     status.value = 'loading'
     error.value = null
+    startTicking() // 秒表与 loading 同生共死，在 finally 里收掉
 
     try {
       const response = await analyzeText(source, options.dimensions)
@@ -118,6 +128,9 @@ export const useAnalysisStore = defineStore('analysis', () => {
       error.value = toErrorInfo(err)
       status.value = 'error'
       return false
+    } finally {
+      // 无论成功、失败还是被判过期，都要收掉秒表：否则会看到一个永远在涨的秒数
+      stopTicking()
     }
   }
 
@@ -130,6 +143,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
   /** 清空全部状态（重新开始一次校勘时调用），并作废在途分析。 */
   function reset() {
     activeRun += 1
+    stopTicking() // 作废在途分析时秒表也要停，否则数字会一直涨
     status.value = 'idle'
     dimensions.value = []
     entities.value = []
@@ -137,6 +151,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     meta.value = { ...EMPTY_META }
     error.value = null
     analyzedText.value = ''
+    elapsedSeconds.value = 0
   }
 
   return {
@@ -148,6 +163,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     meta,
     error,
     analyzedText,
+    elapsedSeconds,
     // getters
     isLoading,
     isReady,
@@ -157,6 +173,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     uncertainDimensions,
     hasGraph,
     knowledgePoints,
+    progressPercent,
     // actions
     analyze,
     clearError,

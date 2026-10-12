@@ -7,7 +7,7 @@
  */
 
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { analyzeTextMock } = vi.hoisted(() => ({ analyzeTextMock: vi.fn() }))
 
@@ -207,5 +207,87 @@ describe('作废在途响应', () => {
 
     expect(store.meta.requestId).toBe('req_second')
     expect(store.analyzedText).toBe('第二篇')
+  })
+})
+
+describe('读秒进度（F9 分析也要给用户看得见的在动）', () => {
+  let store
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = useAnalysisStore()
+    analyzeTextMock.mockReset()
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('加载期间按秒自增，结束后停表', async () => {
+    const pending = deferred()
+    analyzeTextMock.mockReturnValue(pending.promise)
+
+    const done = store.analyze('文本')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.isLoading).toBe(true)
+    expect(store.elapsedSeconds).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(store.elapsedSeconds).toBe(3)
+
+    pending.resolve(response())
+    await done
+    expect(store.status).toBe('ready')
+
+    // 关键：结束后秒表必须停，否则用户看到一个永远在涨的数字
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(store.elapsedSeconds).toBe(3)
+  })
+
+  it('条宽随秒数推进，但永不满格', async () => {
+    const pending = deferred()
+    analyzeTextMock.mockReturnValue(pending.promise)
+    const done = store.analyze('文本')
+    await vi.advanceTimersByTimeAsync(0)
+
+    const 起初 = store.progressPercent
+    await vi.advanceTimersByTimeAsync(30_000)
+    const 之后 = store.progressPercent
+    expect(之后).toBeGreaterThan(起初)
+    expect(之后).toBeLessThanOrEqual(95)
+
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(store.progressPercent).toBe(95) // 封顶
+
+    pending.resolve(response())
+    await done
+  })
+
+  it('失败也要停表（否则报错后秒数还在涨）', async () => {
+    analyzeTextMock.mockRejectedValue(new ApiError('LLM_TIMEOUT', '停滞'))
+    await store.analyze('文本')
+    expect(store.status).toBe('error')
+
+    // 要守的性质是"不再涨"，而不是某个具体秒数——拒绝是即时发生的，
+    // 具体值取决于微任务与定时器的先后，断言它反而脆
+    const 失败时 = store.elapsedSeconds
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(store.elapsedSeconds).toBe(失败时)
+  })
+
+  it('reset 把秒表归零', async () => {
+    const pending = deferred()
+    analyzeTextMock.mockReturnValue(pending.promise)
+    const done = store.analyze('文本')
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(store.elapsedSeconds).toBe(4)
+
+    store.reset()
+    expect(store.elapsedSeconds).toBe(0)
+    expect(store.progressPercent).toBe(0)
+
+    pending.resolve(response())
+    await done
   })
 })

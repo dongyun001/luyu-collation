@@ -13,7 +13,7 @@
 
     <!-- 核心操作区 -->
     <div class="action-card-container">
-      <div class="action-card">
+      <div class="action-card guji-texture">
 
         <!-- 顶部 Tab 切换 -->
         <div class="card-tabs">
@@ -263,7 +263,7 @@ const startCollation = async () => {
 }
 
 .action-card {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(139, 26, 26, 0.05);
@@ -273,7 +273,7 @@ const startCollation = async () => {
 .card-tabs {
   display: flex;
   border-bottom: 1px solid #eee;
-  background: #fcfcfc;
+  background: var(--surface-sunken);
 }
 
 .tab-item {
@@ -292,7 +292,7 @@ const startCollation = async () => {
 .tab-item.active {
   color: #8b1a1a;
   font-weight: bold;
-  background: #fff;
+  background: var(--surface);
   border-bottom-color: #8b1a1a;
 }
 
@@ -316,9 +316,9 @@ const startCollation = async () => {
   border: 1px solid #dcdcdc; border-radius: 4px;
   padding: 15px; font-family: 'KaiTi', serif; font-size: 16px;
   resize: none; outline: none; box-sizing: border-box;
-  background: #fdfbf7;
+  background: var(--surface-sunken);
 }
-.custom-textarea:focus { border-color: #8b1a1a; background: #fff; }
+.custom-textarea:focus { border-color: #8b1a1a; background: var(--surface); }
 .char-count {
   position: absolute; bottom: 10px; right: 15px;
   font-size: 12px; color: #999; pointer-events: none;
@@ -356,7 +356,7 @@ const startCollation = async () => {
   max-width: 1000px;
 }
 .feature-item {
-  background: #fff;
+  background: var(--surface);
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius);

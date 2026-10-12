@@ -14,6 +14,11 @@ import { defineStore } from 'pinia'
 import { ApiError, NETWORK_ERROR, collate as collateRequest } from '@/api/client'
 import { buildCollationNote, downloadTextFile, noteFilename } from '@/utils/collationNote'
 import {
+  PROGRESS_EXPECTED_S,
+  asymptoticPercent,
+  createElapsedTicker,
+} from '@/utils/progressMeter'
+import {
   MAX_CONCURRENCY,
   mergeCollationItems,
   rebaseItems,
@@ -27,15 +32,10 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.7
 export const MAX_TEXT_LENGTH = 5000
 
 /**
- * 读秒进度条的时间基准：等待到该秒数时条宽约 60%，之后渐近逼近上限。
- *
- * 这只是**预估**，不是真实进度——真实进度拿不到（模型什么时候返回无法预知），
- * 所以它的作用是"让人看出还在动"，具体秒数由 `elapsedSeconds` 如实显示。
+ * 读秒进度条的时间基准（口径见 utils/progressMeter.js）。
+ * 从本模块**再导出一份**是为兼容既有导入方（collationProgress.test.js 直接从 './collation' 取它）。
  */
-export const PROGRESS_EXPECTED_S = 30
-
-/** 进度条上限：永不满格，避免在还没结束时就暗示"完成了"。 */
-const PROGRESS_MAX_PERCENT = 95
+export { PROGRESS_EXPECTED_S }
 
 export const ALL_CHECK_TYPES = ['讹字', '衍文', '脱文', '通假', '异文']
 
@@ -152,26 +152,15 @@ export const useCollationStore = defineStore('collation', () => {
   /** 本轮的分段计划与选项：重试失败段时要知道每段的文本与全文起点。 */
   let chunkPlan = []
   let lastOptions = null
+  /**
+   * 正在途中的分段数（已发出请求、还没拿到回复的段）。
+   *
+   * 为什么要有它：并发 3 而真实上游每段要几十秒时，"已完成 0/6"会在很长时间里纹丝不动，
+   * 用户会以为卡死了。把"进行中 3"一起显示出来，才能如实说明"在动"。
+   */
+  const inFlight = ref(0)
   /** 本次校勘已等待的秒数。status==='loading' 期间按秒自增，供「读秒进度条」显示。 */
-  const elapsedSeconds = ref(0)
-  /** 秒表句柄。放在 store 里而不是组件里，是为了让加载屏与工作台横条共用同一个读数。 */
-  let ticker = null
-
-  function stopTicking() {
-    if (ticker !== null) {
-      clearInterval(ticker)
-      ticker = null
-    }
-  }
-
-  function startTicking() {
-    stopTicking()
-    elapsedSeconds.value = 0
-    const beganAt = Date.now()
-    ticker = setInterval(() => {
-      elapsedSeconds.value = Math.floor((Date.now() - beganAt) / 1000)
-    }, 1000)
-  }
+  const { seconds: elapsedSeconds, start: startTicking, stop: stopTicking } = createElapsedTicker()
 
   // --- getters ---
   const pendingItems = computed(() => items.value.filter((item) => item.status === 'pending'))
@@ -186,6 +175,16 @@ export const useCollationStore = defineStore('collation', () => {
   const acceptableCount = computed(
     () => highConfidenceItems.value.filter((item) => item.status !== 'accepted').length,
   )
+  /**
+   * 还能被"一键还原"处理掉的条目数 —— 决定「一键还原」按钮是否可用。
+   *
+   * **必须与 `rejectAll()` 的操作对象同一个集合**（`status !== 'rejected'`）。
+   * 旧实现用 `pendingItems.length`（只看 pending），于是出现过这个 bug：
+   * 一键还原后再采纳一条，那条是 accepted 而非 pending，按钮就永久禁用了。
+   */
+  const rejectableCount = computed(
+    () => items.value.filter((item) => item.status !== 'rejected').length,
+  )
   const isReady = computed(() => status.value === 'ready')
   const isLoading = computed(() => status.value === 'loading')
   const canExport = computed(() => acceptedItems.value.length > 0)
@@ -196,9 +195,15 @@ export const useCollationStore = defineStore('collation', () => {
   const hasPartialResult = computed(() => isLoading.value && items.value.length > 0)
   /** 是否应展示工作台（而不是加载/错误/空态整屏）。 */
   const showsWorkspace = computed(() => isReady.value || items.value.length > 0)
-  const progressText = computed(() =>
-    progress.value.total > 1 ? `已完成 ${progress.value.done}/${progress.value.total} 段` : '',
-  )
+  /**
+   * 分段进度文案。除了"已完成 x/y 段"，还在有在途请求时补"进行中 n"——
+   * 并发 3 + 真实上游几十秒/段时，"已完成"会长时间不动，光看它像卡死（见 inFlight 注释）。
+   */
+  const progressText = computed(() => {
+    if (progress.value.total <= 1) return ''
+    const base = `已完成 ${progress.value.done}/${progress.value.total} 段`
+    return inFlight.value > 0 ? `${base} · 进行中 ${inFlight.value}` : base
+  })
   /** 是否有段失败（工作台横条据此显示「重试失败段」）。 */
   const hasFailures = computed(() => failures.value.length > 0)
   /** 失败段里第一段的处理建议，贴在横条上（与整页错误用的是同一套措辞）。 */
@@ -208,14 +213,11 @@ export const useCollationStore = defineStore('collation', () => {
   /**
    * 进度条宽度（百分比）。取「按时间渐近」与「已到货段数占比」的较大者：
    * 前者让单段调用也有可见的推进，后者让长文本的真实进展说话。
+   * 算式本身在 utils/progressMeter.js（校勘与分析共用一份）。
    */
   const progressPercent = computed(() => {
-    const byTime = PROGRESS_MAX_PERCENT * (1 - Math.exp(-elapsedSeconds.value / PROGRESS_EXPECTED_S))
-    const byChunks =
-      progress.value.total > 1
-        ? (progress.value.done / progress.value.total) * PROGRESS_MAX_PERCENT
-        : 0
-    return Math.min(PROGRESS_MAX_PERCENT, Math.round(Math.max(byTime, byChunks)))
+    const ratio = progress.value.total > 1 ? progress.value.done / progress.value.total : 0
+    return asymptoticPercent(elapsedSeconds.value, ratio, PROGRESS_EXPECTED_S)
   })
 
   /**
@@ -372,6 +374,7 @@ export const useCollationStore = defineStore('collation', () => {
         const index = nextIndex
         nextIndex += 1
         const chunk = chunks[index]
+        inFlight.value += 1
         try {
           const response = await collateRequest(chunk.text, options)
           if (isStale()) return // 这一轮已被作废，丢弃响应
@@ -391,6 +394,10 @@ export const useCollationStore = defineStore('collation', () => {
           const info = toErrorInfo(error)
           caught.push({ index, code: info.code, message: info.message })
           if (info.code === 'RATE_LIMITED') stopDispatching = true
+        } finally {
+          // 无论成功、失败还是提前 return，都要把在途计数还回去，
+          // 否则"进行中 n"会永远挂着一个不会减少的数字
+          inFlight.value = Math.max(0, inFlight.value - 1)
         }
       }
     }
@@ -427,6 +434,7 @@ export const useCollationStore = defineStore('collation', () => {
       for (const index of pending) {
         if (runId !== activeRun) return false // 期间「重新开始」了，丢弃本次重试
         const chunk = chunkPlan[index]
+        inFlight.value += 1
         try {
           const response = await collateRequest(chunk.text, lastOptions)
           if (runId !== activeRun) return false
@@ -446,6 +454,8 @@ export const useCollationStore = defineStore('collation', () => {
           if (runId !== activeRun) return false
           const info = toErrorInfo(error)
           stillFailed.push({ index, code: info.code, message: info.message })
+        } finally {
+          inFlight.value = Math.max(0, inFlight.value - 1)
         }
       }
     } finally {
@@ -487,6 +497,9 @@ export const useCollationStore = defineStore('collation', () => {
     items.value = []
     translation.value = ''
     history.value = []
+    // 在途计数按轮清零：上一轮若还有迟到的响应，它只会在自己的 finally 里减，
+    // 这里用 Math.max(0, …) 兜住，不让显示层出现负数
+    inFlight.value = 0
     meta.value = {
       requestId: '',
       model: '',
@@ -693,6 +706,7 @@ export const useCollationStore = defineStore('collation', () => {
     status.value = 'idle'
     error.value = null
     progress.value = { done: 0, total: 0 }
+    inFlight.value = 0
     elapsedSeconds.value = 0
     failures.value = []
     retryingFailure.value = false
@@ -724,6 +738,7 @@ export const useCollationStore = defineStore('collation', () => {
     status.value = 'ready'
     error.value = null
     progress.value = { done: 0, total: 0 }
+    inFlight.value = 0
     elapsedSeconds.value = 0
     failures.value = []
     retryingFailure.value = false
@@ -749,6 +764,7 @@ export const useCollationStore = defineStore('collation', () => {
     error,
     progress,
     elapsedSeconds,
+    inFlight,
     failures,
     retryingFailure,
     filters,
@@ -758,6 +774,7 @@ export const useCollationStore = defineStore('collation', () => {
     highConfidenceItems,
     lowConfidenceItems,
     acceptableCount,
+    rejectableCount,
     isReady,
     isLoading,
     canExport,

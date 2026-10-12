@@ -114,7 +114,11 @@ describe('分段流水线', () => {
     expect(store.status).toBe('loading')
     expect(store.hasPartialResult).toBe(true)
     expect(store.showsWorkspace).toBe(true) // 视图据此从加载屏切到部分结果
-    expect(store.progressText).toBe(`已完成 1/${chunks.length} 段`)
+    // 文案除了"已完成"，还要带上"进行中 n"：并发 3 + 真实上游每段几十秒时，
+    // 只显示"已完成 1/4"会在很长时间里不动，看起来像卡死（2026-10-12 修订）
+    expect(store.progressText).toContain(`已完成 1/${chunks.length} 段`)
+    // 第 1 段回来后，它那个 worker 立刻领走了第 4 段，所以 3 个 worker 又都满了
+    expect(store.progressText).toContain('进行中 3')
 
     // 其余段各给一条**不同**的建议，否则会被跨段去重合并掉
     pending.slice(1).forEach((entry, index) => {

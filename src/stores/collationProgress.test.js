@@ -135,3 +135,70 @@ describe('读秒进度条', () => {
     await done
   })
 })
+
+describe('在途段数（「进行中 n」的数据来源）', () => {
+  let store
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = useCollationStore()
+    collateMock.mockReset()
+  })
+
+  it('单段：请求发出后为 1，回来后归零', async () => {
+    const pending = deferred()
+    collateMock.mockReturnValue(pending.promise)
+
+    // 请求是在 submitText 的同步段里就发出去的（worker 先自增、再 await），
+    // 所以这里不需要等任何 tick 就能读到 1
+    const done = store.submitText('十年春，齐师伐我。')
+    expect(store.inFlight).toBe(1)
+
+    pending.resolve(response([]))
+    await done
+    expect(store.inFlight).toBe(0)
+  })
+
+  it('多段：同时等于并发度，全部回来后归零', async () => {
+    const chunks = splitTextIntoChunks(长文)
+    const pending = chunks.map(() => deferred())
+    let call = 0
+    collateMock.mockImplementation(() => {
+      const promise = pending[call].promise
+      call += 1
+      return promise
+    })
+
+    const done = store.submitText(长文)
+    expect(store.inFlight).toBe(Math.min(3, chunks.length))
+
+    pending.forEach((entry) => entry.resolve(response([])))
+    await done
+    expect(store.inFlight).toBe(0)
+  })
+
+  it('某段失败时也要把在途计数还回去（走 catch 分支不能漏）', async () => {
+    let call = 0
+    collateMock.mockImplementation(() => {
+      call += 1
+      // 第 1 段直接失败；其余成功。用普通 Error 即走 catch（非限流，不会停止派发）
+      return call === 1 ? Promise.reject(new Error('boom')) : Promise.resolve(response([]))
+    })
+
+    await store.submitText(长文)
+    expect(store.inFlight).toBe(0)
+  })
+
+  it('reset 把在途计数清零', async () => {
+    const pending = deferred()
+    collateMock.mockReturnValue(pending.promise)
+    const done = store.submitText('十年春，齐师伐我。')
+    expect(store.inFlight).toBe(1)
+
+    store.reset()
+    expect(store.inFlight).toBe(0)
+
+    pending.resolve(response([]))
+    await done
+  })
+})

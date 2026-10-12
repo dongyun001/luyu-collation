@@ -5,21 +5,36 @@
  *  ① 离线可演示（演示当天断网也不掉图）；② 无版权风险（不引任何第三方素材）；
  *  ③ 不触碰赛规匿名红线（不含任何机构名/Logo）；④ 体积为零（不新增静态资源）。
  *
- * 强度纪律：所有纹样透明度 ≤ 6%，只做"纸感"，不得抢正文对比度。
+ * 强度纪律（分两层，口径见 docs/VISUAL.md §6）：
+ *  ① 满铺底纹（云纹/竹简）压到 ≤6%——它盖在文字底下，必须只留"纸感"；
+ *  ② 角落装饰（卷轴角饰）落在页边内边距的空白里、不压字，用 12%，压到 6% 就等于白做。
+ * 两类东西不共用一个数，这是刻意的。
+ *
+ * 曾经的"回纹满铺"（`.guji-paper--fret`）已于 2026-10-12 撤掉：40px 的方形回纹铺满整卡后
+ * 读起来像方格纸，而不是古籍纹样——问题出在**motif 的方格排布**，把透明度压低治不了，
+ * 所以是撤掉而不是调淡。回纹若要回归，请用作**边框/分隔条**，不要再满铺。
  */
 
 :root {
-  /* 云纹：古籍页面的主纹样，用于页面底与 hero */
-  --pattern-cloud: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='70' viewBox='0 0 140 70'><g fill='none' stroke='%238b1a1a' stroke-width='1.1' stroke-linecap='round'><path d='M10 54c0-9 8-16 17-16 2-9 10-15 19-15 10 0 19 7 21 17 8 0 14 6 14 14'/><path d='M46 22c3-4 8-6 13-5'/><circle cx='27' cy='38' r='2'/><circle cx='46' cy='23' r='2'/></g></svg>");
+  /* ---- 强度 token：全站纹样深浅只在这里调（口径见 docs/VISUAL.md §6）----
+     2026-10-12 第二轮：用户反馈"一丁点纹路都看不到"。实测后确认是**两个原因**叠加：
+     ① 纹样只铺在页底，而工作台/看板的不透明面板把页底盖死了——只有"空页面"（项目列表）才露得出来；
+     ② 云纹本身太稀（140x70 一格、线宽 1.1），正常观看尺寸下读不出纹样。
+     对策：加密到 96x48、线宽 1.5，并新增 `.guji-texture` 把同一纹样铺到**面**上（卡片/面板）。 */
+  --pattern-opacity-page: 0.10; /* 整页纸纹层（App.vue 的 .paper-layer） */
+  --pattern-opacity-surface: 0.09; /* 面纹理（卡片/面板内部，见 .guji-texture） */
+  --pattern-opacity-cloud: 0.10; /* 云纹满铺（旧的 .guji-paper 用法） */
+  --pattern-opacity-slip: 0.08; /* 竹简竖纹 */
+  --pattern-opacity-ornament: 0.22; /* 四角卷轴角饰 */
 
-  /* 回纹（雷纹）：用于区块分隔条与卡片天头 */
-  --pattern-fret: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><path d='M4 4h32v32H12V12h16v16' fill='none' stroke='%238b1a1a' stroke-width='1.2'/></svg>");
+  /* 云纹：古籍页面的主纹样。96x48 一格 + 线宽 1.5，比初版密得多 */
+  --pattern-cloud: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='48' viewBox='0 0 96 48'><g fill='none' stroke='%238b1a1a' stroke-width='1.5' stroke-linecap='round'><path d='M6 38c0-7 6-12 13-12 2-7 8-11 15-11 8 0 14 5 16 13 6 0 11 4 11 10'/><path d='M33 15c2-3 6-4 10-4'/><circle cx='19' cy='26' r='1.8'/><circle cx='34' cy='16' r='1.8'/></g></svg>");
 
-  /* 竹简竖纹：用于 hero 与"原文"面板底 */
+  /* 竹简竖纹：用于 hero 与"原文"面板底（竖向细线，比满铺方格安静得多） */
   --pattern-slip: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='28' height='40' viewBox='0 0 28 40'><g stroke='%238b1a1a' stroke-width='1'><line x1='13' y1='0' x2='13' y2='40'/><line x1='15' y1='0' x2='15' y2='40'/></g></svg>");
 
-  /* 卷轴角饰（如意云头）：用于卡片四角 */
-  --ornament-corner: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'><g fill='none' stroke='%238b1a1a' stroke-width='1.6'><path d='M2 46V10a8 8 0 0 1 8-8h36'/><path d='M10 46V18a8 8 0 0 1 8-8h28'/></g></svg>");
+  /* 卷轴角饰（如意云头）：用于卡片四角。线宽 1.6→2，配合 22% 让它真的看得见 */
+  --ornament-corner: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'><g fill='none' stroke='%238b1a1a' stroke-width='2'><path d='M2 46V10a8 8 0 0 1 8-8h36'/><path d='M10 46V18a8 8 0 0 1 8-8h28'/></g></svg>");
 }
 
 /* ================= 用法一：整块区域打底纹 ================= */
@@ -36,21 +51,36 @@
   inset: 0;
   z-index: -1;
   background-image: var(--pattern-cloud);
-  background-size: 140px 70px;
-  opacity: 0.06;
+  background-size: 96px 48px;
+  opacity: var(--pattern-opacity-cloud);
   pointer-events: none;
 }
 
 .guji-paper--slips::before {
   background-image: var(--pattern-slip);
   background-size: 28px 40px;
-  opacity: 0.05;
+  opacity: var(--pattern-opacity-slip);
 }
 
-.guji-paper--fret::before {
-  background-image: var(--pattern-fret);
-  background-size: 40px 40px;
-  opacity: 0.04;
+/* ================= 用法一之二：把纹样铺到"面"上（卡片/面板） ================= */
+/* 这是 2026-10-12 第二轮加的关键一条：只铺页底时，纹理会被工作台/看板的不透明面板盖住，
+   用户只在"空页面"看得到（实测原话："只有项目列表看到了纹路"）。
+   铺到面上之后，**每一页、每一块内容所在的区域**都看得见。
+   位子纪律：仍占 `::before`，所以同一个元素上不要再挂 `.guji-paper`（会互相覆盖）。 */
+.guji-texture {
+  position: relative;
+  isolation: isolate;
+}
+
+.guji-texture::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--pattern-cloud);
+  background-size: 96px 48px;
+  opacity: var(--pattern-opacity-surface);
+  pointer-events: none;
 }
 
 /* ================= 用法二：卷轴卡四角角饰 ================= */
@@ -66,24 +96,13 @@
   background-repeat: no-repeat;
   background-size: 22px 22px;
   background-position: left top, right top, left bottom, right bottom;
-  opacity: 0.12;
-}
-
-/* 分隔用的回纹细条 */
-.guji-fret-divider {
-  height: 10px;
-  background-image: var(--pattern-fret);
-  background-size: 20px 20px;
-  opacity: 0.12;
-  border: none;
-  margin: var(--space-4) 0;
+  opacity: var(--pattern-opacity-ornament);
 }
 
 /* 打印与降低动效偏好下，纹样一律撤掉（纸感可省，可读性不可让） */
 @media print {
   .guji-paper::before,
-  .guji-scroll-frame::after,
-  .guji-fret-divider {
+  .guji-scroll-frame::after {
     display: none;
   }
 }

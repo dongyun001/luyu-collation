@@ -11,9 +11,15 @@
  */
 
 :root {
-  /* --- 基础色 --- */
-  --paper: #fdfbf7; /* 宣纸底 */
-  --paper-raised: #fffdfa; /* 卡片底，比宣纸再亮一档 */
+  /* --- 基础色 ---
+     2026-10-12 第二轮：整片界面原先几乎全是纯白（面板 #fff、卡片 #fffcfc），
+     配上淡底纹就只剩"白"——用户的原话是"后面背景纯白色太丑"。
+     现在把"面"分成三档暖纸色，纯白只留给按钮/气泡这类小控件。 */
+  --paper: #f6f0e2; /* 页面底（宣纸，明显偏暖） */
+  --surface: #fcf8ee; /* 主要的面：卡片 / 面板 / 区块 */
+  --surface-sunken: #f1e9da; /* 下沉的面：工具栏、面板天头、页签条 */
+  --paper-raised: var(--surface); /* 兼容旧名（.guji-section 在用） */
+  --surface-veil: rgba(252, 248, 238, 0.72); /* 半透明面：让底下的纹理透出来一点 */
   --ink: #2b2b2b; /* 正文字色 */
   --ink-soft: #555;
   --ink-muted: #888;
@@ -21,8 +27,10 @@
   --cinnabar: #8b1a1a; /* 朱红主色 */
   --cinnabar-dark: #6d1414; /* hover / 按下 */
   --cinnabar-wash: #fdf1f1; /* 主色浅底 */
-  --line: #e6e2d8; /* 米色边框 */
-  --line-soft: #f0ece3;
+  /* 边框：2026-10-12 由 #e6e2d8 加深一档——原值在浅底上太"飘"，
+     卡片边界立不起来，整体显得单薄（配合纹理加深一起调） */
+  --line: #ded8ca;
+  --line-soft: #eae3d4;
   --success: #2e8b57;
   --warn: #daa520;
   --danger: #c0392b;
@@ -71,9 +79,11 @@
   margin-bottom: var(--space-5);
 }
 
-/* 顶部一道朱红细线，像卷轴的天头 */
-.guji-section::before {
-  content: '';
+/* 顶部一道朱红细线，像卷轴的天头。
+   注意：它是**真实子元素**而不是 `::before`——`.guji-section` 同时可能挂 `.guji-paper`
+   （满铺底纹也占 `::before`），两条规则同优先级时会互相覆盖，导致带底纹的卡片丢掉这道线。
+   伪元素只留两个位子：`::before` 给底纹、`::after` 给卷轴角饰。 */
+.guji-section__rule {
   position: absolute;
   top: 0;
   left: var(--space-5);
@@ -81,6 +91,22 @@
   height: 2px;
   background: linear-gradient(90deg, var(--cinnabar), rgba(139, 26, 26, 0.15) 70%, transparent);
   border-radius: 1px;
+  pointer-events: none;
+  /* 入场：像用笔从左往右拖出一道朱线（一次性，延迟 80ms 让卡片先落位）。
+     reduced-motion 下由全局规则压成瞬时。 */
+  transform-origin: left center;
+  animation: ruleDraw 0.72s cubic-bezier(0.33, 1, 0.68, 1) 80ms both;
+}
+
+@keyframes ruleDraw {
+  from {
+    transform: scaleX(0);
+    opacity: 0.2;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 1;
+  }
 }
 
 .guji-section__head {
@@ -195,4 +221,87 @@
 /* 数值一律用等宽数字，避免跳动（统计卡/读秒共用） */
 .guji-num {
   font-variant-numeric: tabular-nums;
+}
+
+/* ================= 读秒进度条（ProgressMeter 组件专用） =================
+   放在全局而不是某个视图里：它被三处共用（校勘加载屏、工作台横条、分析加载态），
+   样式跟着组件走才能保证三处永远长得一样。 */
+.progress-meter {
+  width: 100%;
+}
+
+.progress-track {
+  width: min(360px, 70vw);
+  height: 8px;
+  margin-top: 18px;
+  border-radius: 4px;
+  background: #ececec;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--cinnabar);
+  /* 秒数整秒跳，宽度用过渡抹平，看起来是连续推进而不是一格一格跳 */
+  transition: width 0.9s linear;
+}
+
+.progress-readout {
+  margin: 10px 0 0;
+  font-size: 14px;
+  color: var(--cinnabar);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--ink-muted);
+  line-height: 1.7;
+}
+
+/* 紧凑模式：工作台横条里只占一行，条更细、不居中 */
+.progress-meter.is-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.progress-meter.is-compact .progress-track {
+  width: min(220px, 40vw);
+  height: 6px;
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.progress-meter.is-compact .progress-readout {
+  margin: 0;
+  font-size: 12px;
+}
+
+.progress-meter.is-compact .progress-hint {
+  margin: 0;
+}
+
+/* ================= 无障碍：尊重系统的"减少动态效果"偏好 =================
+   全站唯一一处兜底。需要压掉的是**无限循环的脉冲**（加载文案、悬浮球呼吸、分段转圈，共 4 处）
+   与各种宽度过渡——它们对晕动敏感的人确实不友好。
+   放在全局而不是逐个组件里加，新组件自动被覆盖。
+   注意：这里**只管动效，不动静态纹样/角饰**——静态装饰没有运动，
+   不属于 prefers-reduced-motion 的管辖范围（把它一起藏掉是无谓的降级）。
+   图表（ECharts）的动画不吃 CSS，另在 components/ChartBox.vue 里按同一偏好关掉。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    /* 延迟也要清掉：错峰入场用的是 animation-delay，只压时长的话元素仍会
+       空白地干等几百毫秒才出现，那正是 reduce 用户最不想要的 */
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -22,7 +22,7 @@
       {{ notice.message }}
     </div>
 
-    <SectionCard :title="`本机项目（${filtered.length} / ${projects.length}）`" pattern="fret">
+    <SectionCard :title="`本机项目（${filtered.length} / ${projects.length}）`">
       <template #actions>
         <span class="head-tag">仅本机可见</span>
       </template>
@@ -341,7 +341,7 @@ onMounted(refresh)
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   padding: 10px 14px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .project-item:hover {

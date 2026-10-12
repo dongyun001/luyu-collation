@@ -105,6 +105,38 @@ describe('决策写入时间线（F3 留痕）', () => {
   })
 })
 
+describe('「一键还原」按钮的可用性判据（拒绝回归）', () => {
+  let store
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = useCollationStore()
+    seed(store, [item({ id: 1 }), item({ id: 2, type: '通假', original: '说', suggested: '悦' })])
+  })
+
+  it('rejectableCount 覆盖 pending 与 accepted 两种，而不只是 pending', () => {
+    expect(store.rejectableCount).toBe(2)
+    store.accept(1)
+    expect(store.rejectableCount).toBe(2) // 采纳过的也算"还能被还原"
+  })
+
+  it('全部还原后没有可还原项 → 按钮该禁用', () => {
+    store.rejectAll()
+    expect(store.rejectableCount).toBe(0)
+  })
+
+  it('还原之后再采纳一条，按钮必须重新可用', () => {
+    // 这是实测踩到的 bug：旧判据用 pendingItems（只看 pending），
+    // 还原后那条变成 accepted 而非 pending，于是按钮被永久禁用
+    store.rejectAll()
+    expect(store.rejectableCount).toBe(0)
+
+    store.accept(1)
+    expect(store.pendingItems).toHaveLength(0) // 旧判据在这里为 0（所以是错的）
+    expect(store.rejectableCount).toBe(1) // 新判据正确放行
+  })
+})
+
 describe('导出前置条件', () => {
   let store
 

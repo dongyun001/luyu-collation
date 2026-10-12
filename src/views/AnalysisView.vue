@@ -36,7 +36,7 @@
 
     <template v-else>
       <!-- 文献画像 -->
-      <SectionCard title="本次校勘概况" pattern="fret">
+      <SectionCard title="本次校勘概况">
         <div class="profile">
           <div class="profile-item">
             <span class="profile-label">原文</span>
@@ -72,13 +72,16 @@
       </SectionCard>
 
       <!-- 多维度文献分析（F9） -->
-      <SectionCard title="多维度文献分析" pattern="slips">
+      <SectionCard title="多维度文献分析">
         <template #actions>
           <span v-if="analysis.meta.sampled" class="head-tag">基于节选</span>
           <span v-if="analysis.meta.elapsedMs" class="head-tag guji-num">
             {{ (analysis.meta.elapsedMs / 1000).toFixed(1) }}s
           </span>
         </template>
+
+        <!-- 分析完成时落一枚章（一次性动效） -->
+        <SealStamp v-if="analysis.isReady" text="析" :size="30" placement="header" />
 
         <p class="guji-disclaimer">
           AI 辅助判断，仅供参考，请以专业工具书为准。核验口径见 <code>docs/EVAL.md</code> §10；
@@ -99,9 +102,18 @@
           </template>
         </div>
 
-        <div v-else-if="analysis.isLoading" class="guji-empty">
-          <span class="guji-empty__icon spinner">⏳</span>
-          正在调用模型做多维度判断…（与校勘相互独立，失败不影响上方结果）
+        <div v-else-if="analysis.isLoading" class="analysis-loading">
+          <p class="analysis-loading__title">
+            <span class="spinner">⏳</span> 正在调用模型做多维度判断…
+          </p>
+          <!-- 单次调用拿不到真实进度，条宽按已用时间预估；秒数与"七个维度逐一判断"是如实的 -->
+          <ProgressMeter
+            aria-label="多维度分析进度"
+            :percent="analysis.progressPercent"
+            :seconds="analysis.elapsedSeconds"
+            label="七个维度逐一判断中"
+            hint="内容较长或上游繁忙时会久一些；与校勘相互独立，失败不影响上方结果。"
+          />
         </div>
 
         <template v-else>
@@ -216,6 +228,8 @@ import { useRouter } from 'vue-router'
 import DimensionCard from '@/components/DimensionCard.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import KnowledgeGraph from '@/components/KnowledgeGraph.vue'
+import ProgressMeter from '@/components/ProgressMeter.vue'
+import SealStamp from '@/components/SealStamp.vue'
 import SectionCard from '@/components/SectionCard.vue'
 import StatsCards from '@/components/StatsCards.vue'
 import TypeLegend from '@/components/TypeLegend.vue'
@@ -365,6 +379,23 @@ watch(
   animation: pulse 1.6s ease-in-out infinite;
 }
 
+/* 分析加载态：与校勘加载屏同一套观感（进度条样式在 styles/theme.css） */
+.analysis-loading {
+  padding: var(--space-4) 0 var(--space-2);
+  text-align: center;
+}
+
+.analysis-loading__title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+.analysis-loading .progress-track {
+  margin-left: auto;
+  margin-right: auto;
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -447,7 +478,7 @@ watch(
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   padding: var(--space-3);
-  background: #fff;
+  background: var(--surface);
 }
 
 .chart-cell.is-wide {

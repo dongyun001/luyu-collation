@@ -1,6 +1,6 @@
 <template>
   <div class="about-container">
-    <div class="card guji-paper guji-paper--fret">
+    <div class="card guji-texture">
       <h2>关于本项目</h2>
       <p>
         本项目面向古籍数字化整理中的校勘环节：用大语言模型给出<strong>可复核的校勘建议</strong>
@@ -46,7 +46,7 @@
   padding-top: 40px;
 }
 .card {
-  background: #fff;
+  background: var(--surface);
   padding: 40px;
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
