@@ -20,13 +20,14 @@ from pydantic import ValidationError
 
 from server.config import Settings
 from server.main import app
+from server.routers.collate import _to_collation_items
 from server.services.llm import complete_json, extract_json_object
 from server.services.prompt_loader import PromptError, load_prompt, render
 from server.tests.fake_llm_provider import FIXTURE_SAMPLE_TEXT
 from server.tests.fake_llm_provider import app as fake_app
 from server.utils import rate_limit
 from server.utils.errors import ApiError
-from server.utils.schemas import MAX_TEXT_LEN, ModelItem
+from server.utils.schemas import MAX_TEXT_LEN, ModelItem, ModelOutputEnvelope
 
 FAKE_PORT = 3099
 FAKE_BASE_URL = f"http://127.0.0.1:{FAKE_PORT}/v1"
@@ -107,7 +108,7 @@ def test_collate_filters_and_normalizes_model_output(client: TestClient) -> None
     assert body["droppedCount"] == 4
     assert [item["id"] for item in body["items"]] == [1, 2, 3, 4]
     assert [item["type"] for item in body["items"]] == ["讹字", "通假", "异文", "讹字"]
-    # offset 由后端按原文重新定位并按升序排列，不采信模型自报值
+    # offset 由后端按「校验后采用、校验不过退回首次出现」定位，并按升序排列
     assert [item["offset"] for item in body["items"]] == [2, 11, 14, 19]
     # 置信度经字表命中修正：代/伐、说/悦 各 +0.1 封顶 1.0；88 -> 0.88 再 +0.1；
     # 未命中字表的异文保持 0.55（前端据此折叠为低置信建议）
@@ -147,6 +148,68 @@ def test_collate_with_text_matching_nothing_drops_everything(client: TestClient)
     body = _collate(client, "abc").json()
     assert body["items"] == []
     assert body["droppedCount"] == 8
+
+
+# ---------------------------------------------------------------------------
+# 条目定位与去重（2026-10-12 修订）：同一个字重复出现时，两处都该被留住并标对位置
+# ---------------------------------------------------------------------------
+def _model_item(offset=None) -> dict:
+    """一条「代 → 伐」讹字建议；offset 为 None 时表示模型没给。"""
+    item = {
+        "type": "讹字",
+        "original": "代",
+        "suggested": "伐",
+        "reason": "「伐」误作「代」，形近而讹",
+        "confidence": 0.95,
+    }
+    if offset is not None:
+        item["offset"] = offset
+    return item
+
+
+def test_repeated_char_keeps_both_occurrences() -> None:
+    """同一个字出现两处、模型各报一条：**两条都要留**。
+
+    旧实现把两处当成「同类型+同原文+同建议」的重复，第二处被丢弃（实测确实丢了）。
+    去重键带上 offset 之后，两处才是两处。
+    """
+    text = "代我。代我。"
+    assert [i for i, char in enumerate(text) if char == "代"] == [0, 3]
+
+    items, dropped = _to_collation_items(
+        ModelOutputEnvelope(items=[_model_item(0), _model_item(3)], translation=""),
+        text,
+    )
+
+    assert dropped == 0
+    assert [item.offset for item in items] == [0, 3]
+    assert [item.id for item in items] == [1, 2]  # 仍是按序编号，前端据此可分别采纳
+
+
+def test_model_offset_is_honored_when_it_matches() -> None:
+    """模型自报的 offset 指向第二处且该处文本确实等于 original → **采用它**（不再恒为 0）。"""
+    items, dropped = _to_collation_items(
+        ModelOutputEnvelope(items=[_model_item(3)], translation=""), "代我。代我。"
+    )
+    assert dropped == 0
+    assert [item.offset for item in items] == [3]
+
+
+@pytest.mark.parametrize(
+    ("text", "offset"),
+    [
+        ("代我。", 1),    # 位置合法但那里的字不是「代」（模型数错了）
+        ("代我。", 99),   # 越界
+        ("代我。", None),  # 模型压根没给
+    ],
+)
+def test_invalid_or_missing_offset_falls_back_to_first_occurrence(text: str, offset) -> None:
+    """校验不通过就退回首次出现——保住"防模型乱报 offset"的能力。"""
+    items, dropped = _to_collation_items(
+        ModelOutputEnvelope(items=[_model_item(offset)], translation=""), text
+    )
+    assert dropped == 0
+    assert [item.offset for item in items] == [0]
 
 
 # ---------------------------------------------------------------------------
@@ -239,39 +302,68 @@ def test_bad_envelope_returns_llm_bad_json(
     assert response.json()["error"]["code"] == "LLM_BAD_JSON"
 
 
+def _llm_settings(fake_provider: str, model: str, **overrides) -> Settings:
+    """构造只指向假模型的 Settings；超时预算用小数，避免让用例真等几十秒。"""
+    base = {
+        "llm_provider": "qwen",
+        "llm_api_key": "fake-key",
+        "llm_base_url": fake_provider,
+        "llm_model": model,
+        "ocr_api_key": "",
+        "ocr_secret_key": "",
+        "port": 3001,
+        "max_attempts": 1,
+    }
+    base.update(overrides)
+    return Settings(**base)
+
+
 def test_upstream_timeout_maps_to_llm_timeout(fake_provider: str) -> None:
-    """直接测 llm.py 的超时映射，用小超时避免让测试等满 30 秒。"""
-    settings = Settings(
-        llm_provider="qwen",
-        llm_api_key="fake-key",
-        llm_base_url=fake_provider,
-        llm_model="fake-timeout",
-        ocr_api_key="",
-        ocr_secret_key="",
-        port=3001,
-        request_timeout_s=0.4,
+    """连响应头都不给的上游 -> LLM_TIMEOUT（由首块宽限拦下）。"""
+    settings = _llm_settings(
+        fake_provider, "fake-timeout", first_token_timeout_s=1.0, request_budget_s=30.0
     )
     with pytest.raises(ApiError) as excinfo:
         asyncio.run(complete_json(settings=settings, system_prompt="s", user_prompt="u"))
     assert excinfo.value.code == "LLM_TIMEOUT"
 
 
-def test_dribbling_upstream_still_hits_hard_deadline(fake_provider: str) -> None:
-    """上游边生成边吐字节时，httpx 的「间隔超时」拦不住，必须由外层硬性总时限兜住。
+def test_slow_but_producing_upstream_is_not_a_timeout(fake_provider: str) -> None:
+    """**判据翻转用例**：边生成边吐字节的上游，即便总耗时远超阈值也必须成功。
 
-    实测来源：367 字的一次请求在设定 30 秒上限的情况下跑了 900 多秒才失败，违背
-    PRD §5「响应 ≤30s」——因为 httpx 的 read timeout 衡量的是相邻两次读取之间的间隔。
-    这里把上限设成 2 秒，假模型每秒吐一点、共吐 10 次（约 10 秒才自然结束）。
+    旧实现（60 秒硬性总时限）在这里期望超时；实测证明那是误杀——流式实测 20 余次，
+    相邻增量块的最大间隔只有 4.6 秒，上游一直在产出。假模型每秒吐一块、共吐约 10 块
+    （总耗时约 10 秒，远大于停滞阈值 2 秒），正好复现"慢但在动"。
     """
-    settings = Settings(
-        llm_provider="qwen",
-        llm_api_key="fake-key",
-        llm_base_url=fake_provider,
-        llm_model="fake-dribble",
-        ocr_api_key="",
-        ocr_secret_key="",
-        port=3001,
-        request_timeout_s=2.0,
+    settings = _llm_settings(
+        fake_provider,
+        "fake-dribble",
+        stall_timeout_s=2.0,
+        first_token_timeout_s=2.0,
+        request_budget_s=60.0,
+    )
+    started = time.monotonic()
+    result = asyncio.run(complete_json(settings=settings, system_prompt="s", user_prompt="u"))
+    elapsed = time.monotonic() - started
+
+    # 必须拿到完整正文（吐了约 10 块才结束）
+    assert "联调固定译文" in result.content
+    # 关键断言：我们**等**它吐完了，而不是在吞吐间隔上把它掐断。
+    assert elapsed >= 5, f"没有等到流结束就返回了，耗时 {elapsed:.1f}s"
+
+
+def test_silent_upstream_hits_stall_watchdog(fake_provider: str) -> None:
+    """吐一块后彻底静默 -> LLM_TIMEOUT，且必须由**停滞看门狗**触发。
+
+    假模型静默 30 秒；这里把停滞阈值设成 0.3 秒、总预算设成 10 秒。断言总耗时远小于
+    静默时长与总预算，才能证明拦下它的是"没有新内容"这条判据，而不是别的兜底。
+    """
+    settings = _llm_settings(
+        fake_provider,
+        "fake-stall",
+        stall_timeout_s=0.3,
+        first_token_timeout_s=1.0,
+        request_budget_s=10.0,
     )
     started = time.monotonic()
     with pytest.raises(ApiError) as excinfo:
@@ -279,9 +371,43 @@ def test_dribbling_upstream_still_hits_hard_deadline(fake_provider: str) -> None
     elapsed = time.monotonic() - started
 
     assert excinfo.value.code == "LLM_TIMEOUT"
-    # 关键断言：必须是总时限（约 2 秒）拦下的，而不是等流自己吐完（约 10 秒）才失败。
-    # 若这里失败，说明总时限没生效，慢上游又能把请求挂住十几分钟。
-    assert elapsed < 6, f"硬性总时限没生效，耗时 {elapsed:.1f}s"
+    assert "停滞" in excinfo.value.message
+    assert elapsed < 3, f"不是停滞看门狗拦下的，耗时 {elapsed:.1f}s"
+
+
+def test_stalled_attempt_is_retried_and_succeeds(fake_provider: str) -> None:
+    """停滞的段会被重试；假模型奇数次调用静默、偶数次正常，所以重试应当成功。
+
+    现状下同样的输入会直接失败（首段超时 -> 整轮报错），这是本次改动的核心收益点。
+    """
+    settings = _llm_settings(
+        fake_provider,
+        "fake-flaky",
+        stall_timeout_s=0.3,
+        first_token_timeout_s=1.0,
+        request_budget_s=30.0,
+        max_attempts=3,
+        retry_backoff_s=0.0,
+    )
+    result = asyncio.run(complete_json(settings=settings, system_prompt="s", user_prompt="u"))
+    assert "联调固定译文" in result.content
+
+
+def test_exhausted_retries_report_attempt_count(fake_provider: str) -> None:
+    """重试用尽后仍失败：错误消息要说明尝试了几次，便于现场定位与佐证。"""
+    settings = _llm_settings(
+        fake_provider,
+        "fake-stall",
+        stall_timeout_s=0.2,
+        first_token_timeout_s=0.4,
+        request_budget_s=30.0,
+        max_attempts=3,
+        retry_backoff_s=0.0,
+    )
+    with pytest.raises(ApiError) as excinfo:
+        asyncio.run(complete_json(settings=settings, system_prompt="s", user_prompt="u"))
+    assert excinfo.value.code == "LLM_TIMEOUT"
+    assert "共尝试 3 次" in excinfo.value.message
 
 
 # ---------------------------------------------------------------------------

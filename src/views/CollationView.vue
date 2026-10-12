@@ -23,9 +23,24 @@
       <template v-if="isLoading">
         <div class="state-icon spinner">⏳</div>
         <h3 class="state-title">正在调用大模型校勘…</h3>
+        <!-- 读秒进度条：条宽是**预估**（真实进度拿不到），但秒数是如实的，
+             目的是让等待"看得出在动"，不像卡死。 -->
+        <div
+          class="progress-track"
+          role="progressbar"
+          aria-label="校勘进度"
+          :aria-valuenow="store.progressPercent"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        >
+          <div class="progress-fill" :style="{ width: `${store.progressPercent}%` }"></div>
+        </div>
+        <p class="progress-readout">
+          已用时 <strong>{{ store.elapsedSeconds }}</strong> 秒
+          <template v-if="store.progressText"> · {{ store.progressText }}</template>
+        </p>
         <p class="state-text">
-          {{ store.progressText || '单次调用通常在 30 秒内返回。' }}
-          <template v-if="store.progressText">长文本按句读分段提交，每段返回即显示。</template>
+          长文本按句读分段提交，每段返回即显示；上游只要还在产出就不会被判超时。
         </p>
       </template>
 
@@ -54,7 +69,16 @@
       <div v-if="store.isLoading" class="progress-banner">
         <span class="spinner-inline">⏳</span>
         正在逐段校勘…{{ store.progressText }}
+        <span class="banner-timer">已用时 {{ store.elapsedSeconds }} 秒</span>
         （已收到 {{ store.items.length }} 条建议，可先查看处理）
+      </div>
+      <!-- 部分失败：不盖住已到货的结果，给一键重试；已到货的照常可采纳、可导出 -->
+      <div v-else-if="store.hasFailures" class="progress-banner is-error">
+        ⚠️ 有 {{ store.failures.length }}/{{ store.progress.total }} 段未完成：{{ store.failures[0].message }}
+        <span v-if="store.failureHint" class="banner-hint">{{ store.failureHint }}</span>
+        <button class="banner-btn" :disabled="store.retryingFailure" @click="retryFailed">
+          {{ store.retryingFailure ? '正在重试…' : `重试失败段（${store.failures.length}）` }}
+        </button>
       </div>
       <div v-else-if="hasError" class="progress-banner is-error">
         ⚠️ {{ store.error.message }}
@@ -265,9 +289,15 @@ const exportNotice = ref(null)
 
 const lowConfidenceThreshold = LOW_CONFIDENCE_THRESHOLD
 
-const converter = OpenCC.Converter({ from: 'cn', to: 'tw' })
+// 两个方向各建一个转换器：'cn'→'tw' 是简转繁，'tw'→'cn' 是繁转简。
+// 只建前者的话，「简体」模式等于没转换——粘贴繁体原文时点「简体」会毫无反应。
+const toTraditional = OpenCC.Converter({ from: 'cn', to: 'tw' })
+const toSimplified = OpenCC.Converter({ from: 'tw', to: 'cn' })
 /** 视图层统一做繁简转换；store 里始终保存原文，不因展示而改写数据 */
-const convert = (text) => (charMode.value === 'simplified' ? text : converter(text ?? ''))
+const convert = (text) => {
+  const value = text ?? ''
+  return charMode.value === 'simplified' ? toSimplified(value) : toTraditional(value)
+}
 
 const isLoading = computed(() => store.isLoading)
 const hasError = computed(() => store.status === 'error' && !!store.error)
@@ -357,6 +387,11 @@ function exportReport() {
     : { level: 'warn', message: result.message }
 }
 
+/** 重试失败的段：成功则横条自动消失，仍失败则横条连同新的原因留下。 */
+async function retryFailed() {
+  await store.retryFailedChunks()
+}
+
 function restart() {
   store.reset()
   router.push('/')
@@ -404,7 +439,43 @@ function restart() {
   border-bottom-color: #f0d9d6;
 }
 .progress-banner .banner-hint { color: #7a5b1e; margin-left: 8px; }
+.progress-banner .banner-timer { margin: 0 6px; font-variant-numeric: tabular-nums; }
+.progress-banner .banner-btn {
+  margin-left: 10px;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: #8a2b22;
+  background: #fff;
+  border: 1px solid #d9b3ae;
+  border-radius: 11px;
+  cursor: pointer;
+}
+.progress-banner .banner-btn:hover:not(:disabled) { background: #8a2b22; color: #fff; }
+.progress-banner .banner-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .spinner-inline { display: inline-block; animation: pulse 1.6s ease-in-out infinite; }
+
+/* ================= 读秒进度条（加载屏） ================= */
+.progress-track {
+  width: min(360px, 70vw);
+  height: 8px;
+  margin-top: 18px;
+  border-radius: 4px;
+  background: #ececec;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #8b1a1a;
+  /* 秒数整秒跳，宽度用过渡抹平，看起来是连续推进而不是一格一格跳 */
+  transition: width 0.9s linear;
+}
+.progress-readout {
+  margin: 10px 0 0;
+  font-size: 14px;
+  color: #8b1a1a;
+  font-variant-numeric: tabular-nums;
+}
 
 .btn-toggle {
   padding: 4px 12px;

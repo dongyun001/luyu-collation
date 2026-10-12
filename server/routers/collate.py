@@ -90,15 +90,33 @@ def _build_prompts(payload: CollateRequest) -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
+def _locate(text: str, item: ModelItem) -> int:
+    """定位 `original` 在原文中的起点。
+
+    优先采用模型自报的 `offset`，但**先校验**该位置上的文本确实等于 `original`：
+
+    - 校验通过 → 采用。这样能区分「同一个字在文中重复出现」的情况（如「代我。代我。」的
+      第二处），而旧实现一律 `text.find()` 只会标第一处、把第二处也当成第一处。
+    - 校验不通过 → 退回"首次出现"。这挡住了模型常见的从 1 起数、整段偏移等错值
+      （旧实现正是为了防这个才完全弃用模型 offset；现在改成"校验后采用"，
+      既保住防错能力，又修掉重复字只标一处的问题）。
+    """
+    offset = item.offset
+    if isinstance(offset, int) and 0 <= offset <= len(text) - len(item.original):
+        if text[offset : offset + len(item.original)] == item.original:
+            return offset
+    return text.find(item.original)
+
+
 def _to_collation_items(envelope: ModelOutputEnvelope, text: str) -> tuple[list[CollationItem], int]:
     """逐条校验模型建议，返回 (可用条目, 被丢弃条数)。
 
     丢弃的情况与 API.md §2 一致：不合 schema（类型不在五类内、缺理由、置信度越界、
     `suggested` 与 `original` 相同的空操作）、`original` 不是原文子串、
-    与已有条目完全重复（同一处同建议只留一条，避免卡片刷屏）。
+    与已有条目重复（**同类型 + 同原文 + 同建议 + 同 offset**，四元组）。
     """
     dropped = 0
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, int]] = set()
     accepted: list[tuple[int, ModelItem]] = []
 
     for raw in envelope.items:
@@ -112,14 +130,17 @@ def _to_collation_items(envelope: ModelOutputEnvelope, text: str) -> tuple[list[
             dropped += 1
             continue
 
-        key = (item.type, item.original, item.suggested)
+        offset = _locate(text, item)
+
+        # 去重键必须带上 offset：同一个字在文中重复出现时，两处是各自独立的校勘点，
+        # 不带位置会把第二处误判为"重复"而丢弃（旧实现的问题）。
+        key = (item.type, item.original, item.suggested, offset)
         if key in seen:
             dropped += 1
             continue
         seen.add(key)
 
-        # offset 以原文定位为准，不采信模型自报值（模型常从 1 起数或整段偏移）
-        accepted.append((text.find(item.original), confidence_rules.correct_confidence(item)))
+        accepted.append((offset, confidence_rules.correct_confidence(item)))
 
     accepted.sort(key=lambda pair: pair[0])
     items = [

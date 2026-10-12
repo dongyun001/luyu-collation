@@ -66,7 +66,9 @@ class ModelItem(BaseModel):
     # 理由即本作品相对「通用错别字工具」的差异点，缺理由的条目不进入 UI
     reason: str = Field(min_length=1)
     confidence: float
-    # 模型给的 offset 只作参考，最终以原文定位为准（见 routers/collate.py）
+    # 模型给的 offset 会被**校验后采用**：位置合法且该处文本确实等于 original 才采信，
+    # 否则退回首次出现（见 routers/collate.py 的 _locate）。这样重复出现的同一个字
+    # 才能被分别标出，而不是一律标到第一处。
     offset: int | None = None
 
     @field_validator("confidence")

@@ -42,7 +42,8 @@ curl -s http://localhost:3001/api/v1/collate -H "Content-Type: application/json"
 
 期望（与 `FIXTURE_EXPECTED` 一致）：
 
-- `items` 4 条，`id` 依次 1、2、3、4，`offset` 依次 2、11、14、19（按原文位置升序，由后端重新定位，不采信模型自报值）
+- `items` 4 条，`id` 依次 1、2、3、4，`offset` 依次 2、11、14、19（按原文位置升序；
+  由后端定位：模型自报值校验通过才采用、校验不过退回首次出现，见 TECH_DESIGN §4）
 - `confidence` 依次为 `1.0`、`1.0`、`0.55`、`0.98`：前两条由字表命中 +0.1 封顶到 1.0；
   第四条先生成 88 → 归一 0.88，再命中形近表（未/末）提到 0.98；
   第三条（异文）未命中任何字表，保持 0.55，前端会折叠进「低置信建议」且不参与「全部采纳」
@@ -59,11 +60,17 @@ curl -s http://localhost:3001/api/v1/collate -H "Content-Type: application/json"
 
 | `LLM_MODEL` | 假模型行为 | 期望前端/接口表现 |
 |---|---|---|
-| `fake` | 正常返回固定样本 | 200，见上 |
+| `fake` | 正常返回固定样本（非流式） | 200，见上 |
 | `fake-badjson` | 返回非 JSON 散文 | `LLM_BAD_JSON` / 502，前端提示重试 |
 | `fake-schemafail` | JSON 合法但信封结构不对 | `LLM_BAD_JSON` / 502 |
-| `fake-timeout` | 挂起 120 秒 | `LLM_TIMEOUT` / 504 |
+| `fake-timeout` | 连响应头都不给，挂起 120 秒 | `LLM_TIMEOUT` / 504（由**首块宽限**拦下） |
+| `fake-stall` | 流式吐一块后**彻底静默** | `LLM_TIMEOUT` / 504（由**停滞看门狗**拦下） |
+| `fake-dribble` | 流式每秒吐一块、约 10 秒吐完 | **200 成功**——慢但在产出，不该判超时 |
+| `fake-flaky` | 奇数次调用静默、偶数次正常 | **200 成功**——停滞的段被段级重试救回 |
 | `fake-error500` | 上游返回 500 | `PROVIDER_MISCONFIGURED` / 500，消息含上游状态码 |
+
+`fake-dribble` 与 `fake-stall` 是**同一个判据的两面**：**还在产出就不算失败，静默才算**。
+（判据与阈值见 PRD §4「文本分段提交」；旧版把"边吐字节但慢"也判成超时，那时这两行的期望是反的。）
 
 另外两条不依赖假模型：
 

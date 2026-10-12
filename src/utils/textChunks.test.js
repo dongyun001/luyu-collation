@@ -116,14 +116,52 @@ describe('mergeCollationItems', () => {
     expect(merged.map((item) => item.offset)).toEqual([10, 80])
   })
 
-  it('段边界处重复的同一条建议只保留一条', () => {
+  it('同一次建议被模型重复报（内容与位置都相同）只保留一条', () => {
     const dup = { type: '讹字', original: '代', suggested: '伐', offset: 6 }
-    const merged = mergeCollationItems([[dup], [{ ...dup, offset: 200 }]])
+    const merged = mergeCollationItems([[dup], [{ ...dup }]])
     expect(merged).toHaveLength(1)
+  })
+
+  it('同一个字在文中两处：内容相同但位置不同，两条都要留', () => {
+    // 旧实现去重键不含 offset，会把第二处当"重复"吞掉——第二处就永远修不到。
+    const first = { type: '讹字', original: '代', suggested: '伐', offset: 6 }
+    const second = { ...first, offset: 200 }
+    const merged = mergeCollationItems([[first], [second]])
+    expect(merged.map((entry) => entry.offset)).toEqual([6, 200])
   })
 
   it('空输入安全', () => {
     expect(mergeCollationItems([])).toEqual([])
     expect(mergeCollationItems(undefined)).toEqual([])
+  })
+
+  // 以下三条对应 2026-10-12 的补丁：这三件事漏掉任何一件，界面都会出可见的 bug，
+  // 而当时的测试抓不到——因为 store 的测试数据是手写了 status 的，正好把生产代码
+  // 漏掉的那一步补上了。所以这里必须**从合并函数走真实路径**。
+  it('新条目默认是 pending（修 bug 的关键断言）', () => {
+    const merged = mergeCollationItems([
+      [{ id: 1, type: '讹字', original: '代', suggested: '伐', offset: 2 }],
+    ])
+    expect(merged[0].status).toBe('pending')
+  })
+
+  it('二次合并时保留已做过的决定，不重置为 pending', () => {
+    const first = mergeCollationItems([
+      [{ id: 1, type: '讹字', original: '代', suggested: '伐', offset: 2 }],
+    ])
+    first[0].status = 'accepted'
+    const second = mergeCollationItems(
+      [[{ id: 1, type: '讹字', original: '代', suggested: '伐', offset: 2 }]],
+      first,
+    )
+    expect(second[0].status).toBe('accepted')
+  })
+
+  it('跨段合并后 id 唯一（后端每段都从 1 开始，会撞车）', () => {
+    const merged = mergeCollationItems([
+      [{ id: 1, type: '讹字', original: '代', suggested: '伐', offset: 2 }],
+      [{ id: 1, type: '通假', original: '说', suggested: '悦', offset: 40 }],
+    ])
+    expect(merged.map((item) => item.id)).toEqual([1, 2])
   })
 })

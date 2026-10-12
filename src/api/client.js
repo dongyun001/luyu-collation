@@ -7,9 +7,10 @@
 
 const BASE_URL = (import.meta.env.VITE_API_BASE || 'http://localhost:3001').replace(/\/+$/, '')
 
-// 后端单次大模型调用的硬性总时限是 60 秒（server/config.py）。前端再留 5 秒余量，
-// 让后端先返回带明确 code 的 LLM_TIMEOUT，用户看到的才是「模型超时」而不是笼统的「请求超时」。
-const COLLATE_TIMEOUT_MS = 65_000
+// 后端单个 /collate 请求的总预算（含段级重试）是 180 秒（server/config.py 的
+// REQUEST_BUDGET_S）。前端必须**比它长**，否则浏览器先掐断，用户看到的会是笼统的
+// 「请求超时」而不是后端那条明确的「上游停滞」。这里留 15 秒余量。
+const COLLATE_TIMEOUT_MS = 195_000
 const HEALTH_TIMEOUT_MS = 5_000
 
 /** 前端自定义码（后端错误码之外的网络层失败，同一命名空间便于 UI 统一分支） */

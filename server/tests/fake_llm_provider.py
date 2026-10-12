@@ -18,11 +18,17 @@
         uvicorn server.main:app --port 3001
 
 用 `LLM_MODEL` 选择要模拟的故障分支（见 `_MODE_BY_MODEL_KEYWORD`）：
-    fake                 正常返回（含刻意的坏条目，用来验证丢弃计数）
+    fake                 正常返回（含刻意的坏条目，用来验证丢弃计数；非流式）
     fake-badjson         返回非 JSON 文本            -> 期望 LLM_BAD_JSON (502)
     fake-schemafail      返回 JSON 但信封结构不对     -> 期望 LLM_BAD_JSON (502)
-    fake-timeout         拖过超时阈值                -> 期望 LLM_TIMEOUT (504)
+    fake-timeout         连响应头都不给，拖过尝试上限  -> 期望 LLM_TIMEOUT (504)
+    fake-stall           先吐一块、随后彻底静默        -> 期望 LLM_TIMEOUT (504)（停滞看门狗）
+    fake-dribble         SSE 持续吐字、间隔 1 秒       -> 期望**成功**（慢但在产出）
+    fake-flaky           第一次静默、之后正常          -> 期望**成功**（段级重试接住）
     fake-error500        上游 500                    -> 期望 PROVIDER_MISCONFIGURED (500)
+
+`fake-dribble` 与 `fake-stall` 的分工正是新超时判据的两面：**还在产出就不算失败，静默才算**。
+（判据见 PRD §4「文本分段提交」；旧版把"边吐字节但慢"也判成超时，那两个分支的期望是反的。）
 """
 
 from __future__ import annotations
@@ -37,7 +43,18 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 app = FastAPI(title="本地假模型端点（联调/测试专用）")
 
-_MODE_BY_MODEL_KEYWORD = ("badjson", "schemafail", "timeout", "dribble", "error500")
+_MODE_BY_MODEL_KEYWORD = (
+    "badjson",
+    "schemafail",
+    "timeout",
+    "stall",
+    "dribble",
+    "flaky",
+    "error500",
+)
+
+# `fake-flaky` 用的调用计数：第一次静默、之后正常，用来验证段级重试。
+_CALL_COUNTS: dict[str, int] = {}
 
 # 联调样例文本：人工拼凑的测试串（**不是真实文献**），只为让下面的固定条目有落点。
 # 用它喂 POST /collate 时，期望结果为 kept=4 / dropped=4，且置信度经规则修正：
@@ -162,18 +179,41 @@ def _envelope(content: str, model: str) -> dict:
     }
 
 
-# 每秒吐一点、总共吐 10 次的响应。用来复现「上游边生成边吐字节」的场景：
-# httpx 的 read timeout 是相邻两次读取的间隔超时，间隔始终小于阈值 → 它永远不触发，
-# 总耗时可以无限拉长。只有外层硬性总时限（asyncio.timeout）才拦得住。
-# 故意只吐 10 次而不无限吐：万一总时限失效，测试会失败而不是永久挂住。
+# 每秒吐一点、总共吐 10 次的**流式**响应。用来复现「上游边生成边吐字节」的场景：
+# 按新判据（停滞看门狗），这样的上游**不应**被判超时——它一直在产出，只是慢。
+# 故意只吐 10 次而不无限吐：万一逻辑失效，测试会失败而不是永久挂住。
 _DRIBBLE_TICKS = 10
+_DRIBBLE_INTERVAL_S = 1.0
+# `fake-stall` 吐完第一块之后的静默时长。要远大于测试里的 STALL 阈值，
+# 但又不能无限（万一看门狗失效，用例会因尝试上限/总预算失败，而不是永久挂住）。
+_STALL_SILENCE_S = 30.0
 
 
-async def _dribble_stream():
-    body = json.dumps(_envelope("", "fake-dribble"))
-    for _ in range(_DRIBBLE_TICKS):
-        yield body.encode("utf-8")
-        await asyncio.sleep(1)
+def _sse_chunk(model: str, text: str) -> bytes:
+    payload = {
+        "id": "chatcmpl-fake",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": {"content": text}}],
+    }
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+async def _dribble_stream(model: str):
+    body = _FIXTURE_BODY
+    step = max(1, len(body) // _DRIBBLE_TICKS)
+    for start in range(0, len(body), step):
+        yield _sse_chunk(model, body[start : start + step])
+        await asyncio.sleep(_DRIBBLE_INTERVAL_S)
+    yield b"data: [DONE]\n\n"
+
+
+async def _stall_stream(model: str):
+    """吐一块之后彻底静默：判据该在"没有新内容"上触发。"""
+    yield _sse_chunk(model, '{"items": [')
+    await asyncio.sleep(_STALL_SILENCE_S)
+    yield b"data: [DONE]\n\n"
 
 
 @app.post("/v1/chat/completions")
@@ -181,6 +221,10 @@ async def chat_completions(request: Request):
     body = await request.json()
     model = str(body.get("model", "fake"))
     mode = _mode_for(model)
+    _CALL_COUNTS[mode] = _CALL_COUNTS.get(mode, 0) + 1
+    # flaky 用"奇数次停滞、偶数次正常"而不是"只有第一次停滞"：这样同一进程内反复跑
+    # 这个用例也总是「一次失败 + 一次成功」，不依赖跨用例的执行顺序。
+    should_stall = mode == "stall" or (mode == "flaky" and _CALL_COUNTS[mode] % 2 == 1)
 
     if mode == "timeout":
         await asyncio.sleep(120)
@@ -193,8 +237,10 @@ async def chat_completions(request: Request):
         return JSONResponse(
             _envelope(json.dumps({"items": "不是数组", "translation": ""}, ensure_ascii=False), model)
         )
+    if should_stall:
+        return StreamingResponse(_stall_stream(model), media_type="text/event-stream")
     if mode == "dribble":
-        return StreamingResponse(_dribble_stream(), media_type="text/event-stream")
+        return StreamingResponse(_dribble_stream(model), media_type="text/event-stream")
     return JSONResponse(_envelope(_FIXTURE_BODY, model))
 
 

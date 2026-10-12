@@ -27,11 +27,28 @@ PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 }
 
 DEFAULT_PORT = 3001
-# 单次大模型调用的硬性总时限。原为 30 秒，实测发现不可行：
-# 同一供应商的延迟波动达 2~4 倍（158 字实测 17.8s，而 120 字的另一段超过 30s），
-# 30 秒会把正常调用误杀。分段之后用户看到的是"首段到货时间"，
-# 单段上限放宽到 60 秒既保住防挂死能力，又不误杀。（PRD §5 已同步修订）
-REQUEST_TIMEOUT_S = 60.0
+
+# --- 大模型调用的超时预算（PRD §4「文本分段提交」、API.md 错误码表）---
+# 判据是**上游是否还在产出**，不是总耗时。原设计用 60 秒硬性总时限，实测会误杀正常调用：
+# 流式实测 20 余次，相邻增量块的最大间隔只有 4.6 秒（中位 0.1 秒）——上游一直在吐字，
+# 只是总耗时长（单次成功样本达 62s，另有一次 165s 也是靠重试救回来的）。
+# 而同一段 100 字文本三次尝试是 10.1s / 36.8s / 60.4s（极端到 253s），长尾无界，
+# 调大某个总时限数字堵不住。
+#
+# 阈值按实测分布取，留足余量（下面每个数字都给依据，改之前先看 §7 的实测记录）：
+STALL_TIMEOUT_S = 45.0
+# 首块之后允许的最大静默。实测最大间隔 4.6s，取 45s 留约 10 倍余量。
+FIRST_TOKEN_TIMEOUT_S = 90.0
+# 首块宽限单独放宽。实测"正常流式"时首块 ≤4.6s，但上游有时会把整段思考缓冲完才吐第一块，
+# 曾观察到 ~45s 才出首块（用 45s 会在那里误判停滞），故取 90s。
+REQUEST_BUDGET_S = 180.0
+# 一个 /collate 请求内（含重试）的总预算，也是**单次尝试**的上限。
+# 有意让单次尝试能用满整个预算：慢但持续产出的调用本来就该让它跑完；
+# 只有"停滞/首块超时"这种提前放弃的情况下，剩下的预算才会被下一次尝试用掉。
+# 前端超时应取该值 + 余量（见 src/api/client.js），否则浏览器先掐断。
+# 同一段最多尝试次数，以及退避基数（按 1x、2x 递增）。重试只针对 LLM_TIMEOUT。
+MAX_ATTEMPTS = 3
+RETRY_BACKOFF_S = 1.0
 
 
 def _strip_quotes(value: str) -> str:
@@ -91,7 +108,11 @@ class Settings:
     ocr_api_key: str
     ocr_secret_key: str
     port: int
-    request_timeout_s: float = REQUEST_TIMEOUT_S
+    stall_timeout_s: float = STALL_TIMEOUT_S
+    first_token_timeout_s: float = FIRST_TOKEN_TIMEOUT_S
+    request_budget_s: float = REQUEST_BUDGET_S
+    max_attempts: int = MAX_ATTEMPTS
+    retry_backoff_s: float = RETRY_BACKOFF_S
 
     @property
     def llm_configured(self) -> bool:

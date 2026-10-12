@@ -26,6 +26,17 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.7
 /** 单次**调用**的文本上限（PRD §5），与后端 MAX_TEXT_LEN 一致。 */
 export const MAX_TEXT_LENGTH = 5000
 
+/**
+ * 读秒进度条的时间基准：等待到该秒数时条宽约 60%，之后渐近逼近上限。
+ *
+ * 这只是**预估**，不是真实进度——真实进度拿不到（模型什么时候返回无法预知），
+ * 所以它的作用是"让人看出还在动"，具体秒数由 `elapsedSeconds` 如实显示。
+ */
+export const PROGRESS_EXPECTED_S = 30
+
+/** 进度条上限：永不满格，避免在还没结束时就暗示"完成了"。 */
+const PROGRESS_MAX_PERCENT = 95
+
 export const ALL_CHECK_TYPES = ['讹字', '衍文', '脱文', '通假', '异文']
 
 export const DEFAULT_REFERENCE_EDITION = '通行本'
@@ -38,7 +49,7 @@ const ERROR_HINTS = {
   // 这个码同时覆盖「缺密钥」与「上游不可用（密钥无效/余额不足/5xx）」，
   // 所以建议要把两种情况都点到，不能只说「去填密钥」——否则余额不足时用户会白找一遍
   PROVIDER_MISCONFIGURED: '请确认 .env 中的 LLM_API_KEY 已填写且有效，并确认模型账号的余额或额度充足（可参考 .env.example）。',
-  LLM_TIMEOUT: '请稍后重试，或缩短待校勘文本。',
+  LLM_TIMEOUT: '上游长时间没有新内容产出，已自动重试仍未成功。请稍后重试，或缩短待校勘文本。',
   LLM_BAD_JSON: '大模型输出未通过契约校验，已整条拦截、未渲染脏数据。请重试。',
   RATE_LIMITED: '请稍候再试。',
   [NETWORK_ERROR]: '请确认后端已启动，且 VITE_API_BASE 指向正确的地址。',
@@ -109,6 +120,38 @@ export const useCollationStore = defineStore('collation', () => {
   const error = ref(null)
   /** 分段进度：{ done, total }，total<=1 时视图不显示进度条 */
   const progress = ref({ done: 0, total: 0 })
+  /**
+   * 失败的段：[{ index, code, message }]。
+   *
+   * 分段彼此独立，所以某段失败不该让整次校勘判死——已到货的结果照常可用，
+   * 失败段进这个列表，由视图给出「重试失败段」。
+   */
+  const failures = ref([])
+  /** 失败段重试进行中（按钮置灰用）。 */
+  const retryingFailure = ref(false)
+  /** 本轮的分段计划与选项：重试失败段时要知道每段的文本与全文起点。 */
+  let chunkPlan = []
+  let lastOptions = null
+  /** 本次校勘已等待的秒数。status==='loading' 期间按秒自增，供「读秒进度条」显示。 */
+  const elapsedSeconds = ref(0)
+  /** 秒表句柄。放在 store 里而不是组件里，是为了让加载屏与工作台横条共用同一个读数。 */
+  let ticker = null
+
+  function stopTicking() {
+    if (ticker !== null) {
+      clearInterval(ticker)
+      ticker = null
+    }
+  }
+
+  function startTicking() {
+    stopTicking()
+    elapsedSeconds.value = 0
+    const beganAt = Date.now()
+    ticker = setInterval(() => {
+      elapsedSeconds.value = Math.floor((Date.now() - beganAt) / 1000)
+    }, 1000)
+  }
 
   // --- getters ---
   const pendingItems = computed(() => items.value.filter((item) => item.status === 'pending'))
@@ -136,6 +179,24 @@ export const useCollationStore = defineStore('collation', () => {
   const progressText = computed(() =>
     progress.value.total > 1 ? `已完成 ${progress.value.done}/${progress.value.total} 段` : '',
   )
+  /** 是否有段失败（工作台横条据此显示「重试失败段」）。 */
+  const hasFailures = computed(() => failures.value.length > 0)
+  /** 失败段里第一段的处理建议，贴在横条上（与整页错误用的是同一套措辞）。 */
+  const failureHint = computed(() =>
+    failures.value.length ? ERROR_HINTS[failures.value[0].code] || '' : '',
+  )
+  /**
+   * 进度条宽度（百分比）。取「按时间渐近」与「已到货段数占比」的较大者：
+   * 前者让单段调用也有可见的推进，后者让长文本的真实进展说话。
+   */
+  const progressPercent = computed(() => {
+    const byTime = PROGRESS_MAX_PERCENT * (1 - Math.exp(-elapsedSeconds.value / PROGRESS_EXPECTED_S))
+    const byChunks =
+      progress.value.total > 1
+        ? (progress.value.done / progress.value.total) * PROGRESS_MAX_PERCENT
+        : 0
+    return Math.min(PROGRESS_MAX_PERCENT, Math.round(Math.max(byTime, byChunks)))
+  })
 
   // --- internals ---
   function pushHistory({ action, from = '', to = '', type = '' }) {
@@ -218,7 +279,10 @@ export const useCollationStore = defineStore('collation', () => {
 
   /**
    * 逐段跑完所有分段，限量并发；**每段到货就刷新 items**（这就是"一部分就出来一部分"）。
-   * 某段失败时不再派新段，但已到货的结果保留，并把失败信息交给调用方。
+   *
+   * 某段失败时**不停下其余段**：分段彼此独立，让用户拿到尽可能多的结果；
+   * 失败段收进 `failures`，由视图给「重试失败段」。唯一例外是命中限流——
+   * 继续发只会让限流更严重，此时停止派新段。
    *
    * runId 用来作废过期结果：分段是并发的，用户中途「重新开始」或再次提交时，
    * 上一轮迟到的响应不能再写回 store，否则会把已清空的工作台又填上旧建议。
@@ -226,20 +290,22 @@ export const useCollationStore = defineStore('collation', () => {
   async function runChunks(chunks, options, runId) {
     const groups = new Array(chunks.length)
     const elapsed = []
+    const caught = []
     let nextIndex = 0
     let done = 0
-    let firstError = null
+    let stopDispatching = false
 
     const isStale = () => runId !== activeRun
     progress.value = { done: 0, total: chunks.length }
 
     const publish = () => {
       if (isStale()) return
-      items.value = mergeCollationItems(groups.filter(Boolean))
+      // 传上一版 items：把用户已经做过的采纳/还原决定带过去，避免被本段结果重置
+      items.value = mergeCollationItems(groups.filter(Boolean), items.value)
     }
 
     const worker = async () => {
-      while (firstError === null && nextIndex < chunks.length && !isStale()) {
+      while (!stopDispatching && nextIndex < chunks.length && !isStale()) {
         const index = nextIndex
         nextIndex += 1
         const chunk = chunks[index]
@@ -257,9 +323,11 @@ export const useCollationStore = defineStore('collation', () => {
           done += 1
           progress.value = { done, total: chunks.length }
           publish() // 每段到货即渲染
-        } catch (caught) {
+        } catch (error) {
           if (isStale()) return
-          firstError = caught
+          const info = toErrorInfo(error)
+          caught.push({ index, code: info.code, message: info.message })
+          if (info.code === 'RATE_LIMITED') stopDispatching = true
         }
       }
     }
@@ -268,11 +336,69 @@ export const useCollationStore = defineStore('collation', () => {
       Array.from({ length: Math.min(MAX_CONCURRENCY, chunks.length) }, () => worker()),
     )
 
-    if (isStale()) return { failed: null, done, total: chunks.length, stale: true }
+    if (isStale()) return { done, total: chunks.length, failures: [], stale: true }
 
     publish()
     meta.value.elapsedMs = elapsed.reduce((sum, value) => sum + value, 0)
-    return { failed: firstError, done, total: chunks.length, stale: false }
+    return {
+      done,
+      total: chunks.length,
+      failures: caught.sort((a, b) => a.index - b.index),
+      stale: false,
+    }
+  }
+
+  /**
+   * 只重跑失败的段，结果并入现有 items（按「类型+原文+建议」去重、按全文位置排序）。
+   *
+   * 顺序重跑而不是并发：失败段通常没几条，而它们往往正是因为上游吃紧才失败的，
+   * 再并发去撞只会重蹈覆辙。
+   */
+  async function retryFailedChunks() {
+    if (retryingFailure.value || !failures.value.length || !chunkPlan.length) return false
+    const runId = activeRun
+    const pending = failures.value.map((entry) => entry.index)
+    const stillFailed = []
+    retryingFailure.value = true
+    try {
+      for (const index of pending) {
+        if (runId !== activeRun) return false // 期间「重新开始」了，丢弃本次重试
+        const chunk = chunkPlan[index]
+        try {
+          const response = await collateRequest(chunk.text, lastOptions)
+          if (runId !== activeRun) return false
+          // 第二参数传上一版：重试期间用户已做的采纳/还原决定同样不能被重置
+          items.value = mergeCollationItems(
+            [items.value, rebaseItems(response.items, chunk.start)],
+            items.value,
+          )
+          meta.value.droppedCount += response.droppedCount ?? 0
+          meta.value.elapsedMs += response.elapsedMs ?? 0
+          if (response.translation) {
+            translation.value = translation.value
+              ? `${translation.value}\n${response.translation}`
+              : response.translation
+          }
+        } catch (error) {
+          if (runId !== activeRun) return false
+          const info = toErrorInfo(error)
+          stillFailed.push({ index, code: info.code, message: info.message })
+        }
+      }
+    } finally {
+      retryingFailure.value = false
+    }
+    if (stillFailed.length < pending.length) {
+      pushHistory({
+        action: '重试未完成的段',
+        from: `${pending.length} 段`,
+        to: stillFailed.length ? `${stillFailed.length} 段仍失败` : '已全部补齐',
+      })
+    }
+    failures.value = stillFailed
+    progress.value = { done: progress.value.total - stillFailed.length, total: progress.value.total }
+    saveDraft()
+    return stillFailed.length === 0
   }
 
   // --- actions ---
@@ -311,27 +437,53 @@ export const useCollationStore = defineStore('collation', () => {
     sourceText.value = text
     status.value = 'loading'
     error.value = null
-
-    const { failed, done, total, stale } = await runChunks(chunks, resolvedOptions, runId)
+    failures.value = []
+    // 记下本轮的分段计划与选项：重试失败段要按同样的切分与选项重跑
+    chunkPlan = chunks
+    lastOptions = resolvedOptions
+    // 秒表与 loading 同生共死：无论成功、失败还是被判过期，都在 finally 里收掉
+    startTicking()
+    let result
+    try {
+      result = await runChunks(chunks, resolvedOptions, runId)
+    } finally {
+      stopTicking()
+    }
+    const { done, failures: chunkFailures, total, stale } = result
 
     if (stale) return false // 这一轮已被「重新开始」或新提交取代，不要回写任何状态
 
-    if (failed) {
-      const info = toErrorInfo(failed)
+    // 失败段一律登记：即使"一段都没成功"走整页错误，也要留下可重试的清单
+    failures.value = chunkFailures
+
+    // 只有**一段都没成功**才算整次失败（整页错误）。判据必须是「成功的段数」而不是
+    // 「建议条数」——干净文本本来就常常 0 条建议，那样会被误判成全部失败。
+    if (done === 0 && chunkFailures.length) {
+      const first = chunkFailures[0]
       error.value = {
-        ...info,
+        code: first.code,
         message:
           total > 1
-            ? `已完成 ${done}/${total} 段，后续分段失败：${info.message}`
-            : info.message,
+            ? `已完成 0/${total} 段，全部分段失败：${first.message}`
+            : first.message,
+        hint: ERROR_HINTS[first.code] || '',
       }
       status.value = 'error'
-      saveDraft() // 部分结果也存下来，别让用户白等
+      saveDraft() // 保持既有行为：即使没结果也存一次，草稿里至少有原文
       return false
     }
 
+    // 只要有段成功就进工作台：失败段交给横条 + 「重试失败段」，不盖住已到货的部分
     applyResult(text, resolvedOptions, chunks.length)
-    return true
+    if (chunkFailures.length) {
+      // 留痕：部分失败也如实记一笔，别让时间线上看不出这次只跑了一部分
+      pushHistory({
+        action: '分段校勘部分失败',
+        from: `${chunks.length} 段`,
+        to: `${chunkFailures.length} 段未完成，可重试`,
+      })
+    }
+    return chunkFailures.length === 0
   }
 
   function accept(id) {
@@ -397,6 +549,7 @@ export const useCollationStore = defineStore('collation', () => {
   /** 清空全部状态（首页重新开始时调用），同时丢弃本地草稿并作废在途分段。 */
   function reset() {
     activeRun += 1 // 让并发中的分段结果失效，否则迟到的响应会把工作台又填上
+    stopTicking()
     sourceText.value = ''
     items.value = []
     translation.value = ''
@@ -404,6 +557,11 @@ export const useCollationStore = defineStore('collation', () => {
     status.value = 'idle'
     error.value = null
     progress.value = { done: 0, total: 0 }
+    elapsedSeconds.value = 0
+    failures.value = []
+    retryingFailure.value = false
+    chunkPlan = []
+    lastOptions = null
     meta.value = {
       requestId: '',
       model: '',
@@ -427,6 +585,9 @@ export const useCollationStore = defineStore('collation', () => {
     status,
     error,
     progress,
+    elapsedSeconds,
+    failures,
+    retryingFailure,
     // getters
     pendingItems,
     acceptedItems,
@@ -440,8 +601,12 @@ export const useCollationStore = defineStore('collation', () => {
     hasPartialResult,
     showsWorkspace,
     progressText,
+    progressPercent,
+    hasFailures,
+    failureHint,
     // actions
     submitText,
+    retryFailedChunks,
     accept,
     reject,
     acceptAll,
