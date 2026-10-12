@@ -51,3 +51,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+
+# 项目文档（含赛事材料与内部口径）：仅本地留档，不随仓库发布
+# 2026-10-12 起撤下；如需重新纳入，删掉本行并 git add docs
+/docs
