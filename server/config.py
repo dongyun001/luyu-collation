@@ -28,6 +28,15 @@ PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 
 DEFAULT_PORT = 3001
 
+# --- 实验相关开关（EVAL §5 的消融对照 / 可比性要求；2026-10-13 增补）---
+# 关闭后 /collate 跳过规则的置信度修正（services/confidence.py）——即"消融：无规则修正"。
+# 默认 true：不开任何开关时行为与从前完全一致。
+DEFAULT_COLLATE_RULES_ENABLED = True
+# 采样温度。**默认 0.2，与 llm.py 原先硬编码的 _TEMPERATURE 同值**，行为完全不变；
+# 现在它可被 LLM_TEMPERATURE 覆盖，且由 /health 报出——EVAL §5 要求对比实验"同一温度"，
+# 而"温度是多少"必须是**可查证**的，不能只存在于代码里。想要确定性复现可设成 0。
+DEFAULT_TEMPERATURE = 0.2
+
 # --- 大模型调用的超时预算（PRD §4「文本分段提交」、API.md 错误码表）---
 # 判据是**上游是否还在产出**，不是总耗时。原设计用 60 秒硬性总时限，实测会误杀正常调用：
 # 流式实测 20 余次，相邻增量块的最大间隔只有 4.6 秒（中位 0.1 秒）——上游一直在吐字，
@@ -49,6 +58,28 @@ REQUEST_BUDGET_S = 180.0
 # 同一段最多尝试次数，以及退避基数（按 1x、2x 递增）。重试只针对 LLM_TIMEOUT。
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_S = 1.0
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """环境变量开关：1/true/yes/on 为真，0/false/no/off 为假，空或非法取默认值。"""
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _env_float(name: str) -> float | None:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 def _strip_quotes(value: str) -> str:
@@ -113,6 +144,8 @@ class Settings:
     request_budget_s: float = REQUEST_BUDGET_S
     max_attempts: int = MAX_ATTEMPTS
     retry_backoff_s: float = RETRY_BACKOFF_S
+    collate_rules_enabled: bool = DEFAULT_COLLATE_RULES_ENABLED
+    llm_temperature: float = DEFAULT_TEMPERATURE
 
     @property
     def llm_configured(self) -> bool:
@@ -140,6 +173,13 @@ def build_settings() -> Settings:
         ocr_api_key=os.environ.get("OCR_API_KEY", "").strip(),
         ocr_secret_key=os.environ.get("OCR_SECRET_KEY", "").strip(),
         port=port,
+        collate_rules_enabled=_env_bool("COLLATE_RULES_ENABLED", DEFAULT_COLLATE_RULES_ENABLED),
+        # 注意不能用 `or`：0.0 是合法温度（贪心解码），但它是 falsy
+        llm_temperature=(
+            _env_float("LLM_TEMPERATURE")
+            if _env_float("LLM_TEMPERATURE") is not None
+            else DEFAULT_TEMPERATURE
+        ),
     )
 
 

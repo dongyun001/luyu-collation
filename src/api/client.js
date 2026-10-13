@@ -12,6 +12,9 @@ const BASE_URL = (import.meta.env.VITE_API_BASE || 'http://localhost:3001').repl
 // 「请求超时」而不是后端那条明确的「上游停滞」。这里留 15 秒余量。
 const COLLATE_TIMEOUT_MS = 195_000
 const HEALTH_TIMEOUT_MS = 5_000
+// 对校（F13）是纯规则端点，不调模型：3 个参照本 × 5000 字实测也在秒级。
+// 沿用 195 秒会让人以为"卡住了"——其实早就返回了，只是没人告诉界面。
+const COMPARE_TIMEOUT_MS = 20_000
 
 /** 前端自定义码（后端错误码之外的网络层失败，同一命名空间便于 UI 统一分支） */
 export const NETWORK_ERROR = 'NETWORK_ERROR'
@@ -95,6 +98,23 @@ export function analyzeText(text, dimensions) {
   return request('/api/v1/analyze', {
     method: 'POST',
     body: dimensions && dimensions.length ? { text, dimensions } : { text },
+  })
+}
+
+/**
+ * 版本对勘（F13 对校引擎，契约见 API.md §7）。
+ *
+ * **不调用大模型**：纯字符级对齐，因此既不慢也不需要密钥——断网也能用，
+ * 这正是"四法引擎里对校不是模型套壳"的证据。
+ *
+ * @param {string} baseText 底本文本
+ * @param {Array<{name: string, text: string}>} references 1–3 个参照本
+ */
+export function compare(baseText, references) {
+  return request('/api/v1/compare', {
+    method: 'POST',
+    body: { baseText, references },
+    timeoutMs: COMPARE_TIMEOUT_MS,
   })
 }
 

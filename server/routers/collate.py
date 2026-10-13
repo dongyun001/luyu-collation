@@ -7,8 +7,6 @@
 from __future__ import annotations
 
 import json
-import secrets
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -17,9 +15,10 @@ from pydantic import ValidationError
 from ..config import get_settings
 from ..services import confidence as confidence_rules
 from ..services.llm import complete_json, extract_json_object
-from ..services.prompt_loader import load_prompt, render
+from ..services.prompt_loader import COLLATE_PROMPT, TRANSLATE_PROMPT, load_prompt, render
 from ..utils.errors import INTERNAL_ERROR, INVALID_REQUEST, LLM_BAD_JSON, TEXT_TOO_LONG, ApiError
 from ..utils.rate_limit import check_rate_limit
+from ..utils.request_meta import client_key, new_request_id
 from ..utils.schemas import (
     MAX_TEXT_LEN,
     CollateRequest,
@@ -31,24 +30,8 @@ from ..utils.schemas import (
 
 router = APIRouter()
 
-COLLATE_PROMPT = "collate_v2"
-TRANSLATE_PROMPT = "translate_text_v1"
-
 # produceTranslation=false 时替换掉译文子 Prompt，保持 JSON 输出形状不变
 _NO_TRANSLATION_BLOCK = "本次不需要白话译文：`translation` 字段固定返回空字符串。"
-
-
-def _new_request_id() -> str:
-    """形如 req_20261007_ab12cd（形状见 API.md §2 示例，便于日志检索）。"""
-    return f"req_{datetime.now().strftime('%Y%m%d')}_{secrets.token_hex(3)}"
-
-
-def _client_key(request: Request) -> str:
-    """取客户端标识用于限流；部署在反向代理后时认 X-Forwarded-For 的第一跳。"""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _describe_validation_error(exc: ValidationError) -> str:
@@ -108,12 +91,17 @@ def _locate(text: str, item: ModelItem) -> int:
     return text.find(item.original)
 
 
-def _to_collation_items(envelope: ModelOutputEnvelope, text: str) -> tuple[list[CollationItem], int]:
+def _to_collation_items(
+    envelope: ModelOutputEnvelope, text: str, *, rules_enabled: bool = True
+) -> tuple[list[CollationItem], int]:
     """逐条校验模型建议，返回 (可用条目, 被丢弃条数)。
 
     丢弃的情况与 API.md §2 一致：不合 schema（类型不在五类内、缺理由、置信度越界、
     `suggested` 与 `original` 相同的空操作）、`original` 不是原文子串、
     与已有条目重复（**同类型 + 同原文 + 同建议 + 同 offset**，四元组）。
+
+    `rules_enabled=False` 表示走**消融**配置：跳过规则的置信度修正（EVAL §5 的对照项），
+    其余全流程不变。默认 True，行为与从前一致。
     """
     dropped = 0
     seen: set[tuple[str, str, str, int]] = set()
@@ -140,7 +128,8 @@ def _to_collation_items(envelope: ModelOutputEnvelope, text: str) -> tuple[list[
             continue
         seen.add(key)
 
-        accepted.append((offset, confidence_rules.correct_confidence(item)))
+        corrected = confidence_rules.correct_confidence(item) if rules_enabled else item
+        accepted.append((offset, corrected))
 
     accepted.sort(key=lambda pair: pair[0])
     items = [
@@ -160,7 +149,7 @@ def _to_collation_items(envelope: ModelOutputEnvelope, text: str) -> tuple[list[
 
 @router.post("/collate", response_model=CollateResponse)
 async def collate(payload: CollateRequest, request: Request) -> CollateResponse:
-    check_rate_limit(_client_key(request))
+    check_rate_limit(client_key(request))
 
     text = payload.text
     if not text.strip():
@@ -168,9 +157,10 @@ async def collate(payload: CollateRequest, request: Request) -> CollateResponse:
     if len(text) > MAX_TEXT_LEN:
         raise ApiError(TEXT_TOO_LONG, f"文本 {len(text)} 字，超过上限 {MAX_TEXT_LEN} 字")
 
+    settings = get_settings()
     system_prompt, user_prompt = _build_prompts(payload)
     result = await complete_json(
-        settings=get_settings(), system_prompt=system_prompt, user_prompt=user_prompt
+        settings=settings, system_prompt=system_prompt, user_prompt=user_prompt
     )
 
     raw_json = extract_json_object(result.content)
@@ -186,11 +176,13 @@ async def collate(payload: CollateRequest, request: Request) -> CollateResponse:
             LLM_BAD_JSON, f"模型输出未通过 schema 校验：{_describe_validation_error(exc)}"
         ) from exc
 
-    items, dropped = _to_collation_items(envelope, text)
+    items, dropped = _to_collation_items(
+        envelope, text, rules_enabled=settings.collate_rules_enabled
+    )
     translation = envelope.translation if payload.options.produceTranslation else ""
 
     return CollateResponse(
-        requestId=_new_request_id(),
+        requestId=new_request_id(),
         model=result.model,
         elapsedMs=result.elapsed_ms,
         items=items,

@@ -13,6 +13,13 @@ from pathlib import Path
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
+# --- 当前生效的 Prompt 版本：**唯一来源**，各 router 从这里取，/health 也从这里报 ---
+# 为什么集中到一处：EVAL §8 要求每次评测记录 Prompt 版本；过去它散在 router 的常量里，
+# /health 报不出来，只能靠人手记——漏记一次整批数字就不可追溯。
+COLLATE_PROMPT = "collate_v2"
+TRANSLATE_PROMPT = "translate_text_v1"
+ANALYZE_PROMPT = "analyze_v1"
+
 _SECTION_RE = re.compile(r"^##\s+([A-Z_]+)\s*$", re.MULTILINE)
 
 # 未替换的占位符一旦发进 Prompt，模型会把它当正文，属于必须暴露的实现错误

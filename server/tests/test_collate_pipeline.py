@@ -55,7 +55,27 @@ def _collate(client: TestClient, text: str, **options):
 def test_health_ok(client: TestClient) -> None:
     response = client.get("/api/v1/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "llmProvider": "qwen", "ocrConfigured": False}
+    assert response.json() == {
+        "status": "ok",
+        "llmProvider": "qwen",
+        "ocrConfigured": False,
+        # 复现信息（EVAL §8）：当前 Prompt 版本 / 规则开关 / 温度都要能从服务端查出来
+        "collatePrompt": "collate_v2",
+        "rulesEnabled": True,
+        "llmTemperature": 0.2,
+    }
+
+
+def test_health_reports_ablation_switch_and_temperature(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`/health` 必须如实反映消融开关与温度——它们要进对比实验的结果 CSV，靠人手记迟早漏。"""
+    monkeypatch.setenv("COLLATE_RULES_ENABLED", "false")
+    monkeypatch.setenv("LLM_TEMPERATURE", "0")
+    body = client.get("/api/v1/health").json()
+    assert body["rulesEnabled"] is False
+    assert body["llmTemperature"] == 0.0
+    assert body["collatePrompt"] == "collate_v2"
 
 
 def test_health_reports_ocr_configured_when_keys_present(
@@ -64,6 +84,30 @@ def test_health_reports_ocr_configured_when_keys_present(
     monkeypatch.setenv("OCR_API_KEY", "k")
     monkeypatch.setenv("OCR_SECRET_KEY", "s")
     assert client.get("/api/v1/health").json()["ocrConfigured"] is True
+
+
+def test_ablation_switch_skips_rule_confidence_boost(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """消融开了之后，置信度**不再**被形近/通假字表 +0.1。
+
+    夹具里「代→伐」模型自评 0.95、命中形近表 → 默认会被提到 1.0；
+    关掉开关后应原样保留 0.95。两者不同，才说明这个开关真的起作用（否则消融对照是假的）。
+    """
+    normal = _collate(client, FIXTURE_SAMPLE_TEXT).json()
+    boosted = {item["original"]: item["confidence"] for item in normal["items"]}
+    assert boosted["代"] == 1.0  # 规则生效
+
+    rate_limit.reset()
+    monkeypatch.setenv("COLLATE_RULES_ENABLED", "false")
+    ablated = _collate(client, FIXTURE_SAMPLE_TEXT).json()
+    kept = {item["original"]: item["confidence"] for item in ablated["items"]}
+    assert kept["代"] == 0.95  # 规则被跳过，模型自评原样
+    # 除置信度外其它字段不受影响
+    assert [item["offset"] for item in ablated["items"]] == [
+        item["offset"] for item in normal["items"]
+    ]
+    assert ablated["droppedCount"] == normal["droppedCount"]
 
 
 # ---------------------------------------------------------------------------

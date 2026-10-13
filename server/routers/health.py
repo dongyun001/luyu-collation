@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from ..config import get_settings
+from ..services.prompt_loader import COLLATE_PROMPT
 from ..utils.schemas import HealthResponse
 
 router = APIRouter()
@@ -22,4 +23,7 @@ async def health() -> HealthResponse:
         status="ok",
         llmProvider=settings.llm_provider,
         ocrConfigured=settings.ocr_configured,
+        collatePrompt=COLLATE_PROMPT,
+        rulesEnabled=settings.collate_rules_enabled,
+        llmTemperature=settings.llm_temperature,
     )

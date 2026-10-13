@@ -14,8 +14,6 @@
 from __future__ import annotations
 
 import json
-import secrets
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -23,9 +21,10 @@ from pydantic import ValidationError
 
 from ..config import get_settings
 from ..services.llm import complete_json, extract_json_object
-from ..services.prompt_loader import load_prompt, render
+from ..services.prompt_loader import ANALYZE_PROMPT, load_prompt, render
 from ..utils.errors import INTERNAL_ERROR, INVALID_REQUEST, LLM_BAD_JSON, TEXT_TOO_LONG, ApiError
 from ..utils.rate_limit import check_rate_limit
+from ..utils.request_meta import client_key, new_request_id
 from ..utils.schemas import (
     ANALYZE_SAMPLE_HEAD,
     ANALYZE_SAMPLE_TAIL,
@@ -46,26 +45,11 @@ from ..utils.schemas import (
 
 router = APIRouter()
 
-ANALYZE_PROMPT = "analyze_v1"
-
 #: 未能判断的维度在 UI 上的文案（与 docs/VISUAL.md §4.2 的口径一致）
 MISSING_JUDGMENT = "本段文本信息不足，未能判断"
 
 #: 抽样时插入的分隔标记，让模型知道自己看的是首尾拼接而非连续全文
 _SAMPLE_MARKER = "\n……（中间部分省略）……\n"
-
-
-def _new_request_id() -> str:
-    """形如 req_20261012_ab12cd（与 /collate 同一形状，便于日志检索）。"""
-    return f"req_{datetime.now().strftime('%Y%m%d')}_{secrets.token_hex(3)}"
-
-
-def _client_key(request: Request) -> str:
-    """取客户端标识用于限流；部署在反向代理后时认 X-Forwarded-For 的第一跳。"""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _describe_validation_error(exc: ValidationError) -> str:
@@ -216,7 +200,7 @@ def _to_graph(
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest, request: Request) -> AnalyzeResponse:
-    check_rate_limit(_client_key(request))
+    check_rate_limit(client_key(request))
 
     text = payload.text
     if not text.strip():
@@ -250,7 +234,7 @@ async def analyze(payload: AnalyzeRequest, request: Request) -> AnalyzeResponse:
     entities, relations, dropped_graph = _to_graph(envelope)
 
     return AnalyzeResponse(
-        requestId=_new_request_id(),
+        requestId=new_request_id(),
         model=result.model,
         elapsedMs=result.elapsed_ms,
         analyzedChars=len(sampled_text),

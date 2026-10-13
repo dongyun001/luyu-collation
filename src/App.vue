@@ -37,6 +37,7 @@
         <router-link to="/">上传古籍</router-link>
         <router-link to="/collation">校勘工作台</router-link>
         <router-link to="/analysis">分析看板</router-link>
+        <router-link to="/compare">版本对勘</router-link>
         <router-link to="/projects">项目列表</router-link>
         <router-link to="/about">关于项目</router-link>
       </nav>

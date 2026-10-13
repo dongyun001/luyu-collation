@@ -22,6 +22,12 @@ const router = createRouter({
       component: () => import('../views/AnalysisView.vue')
     },
     {
+      path: '/compare',
+      name: 'compare',
+      // 版本对勘（F13 对校引擎）：纯规则、不调模型、断网可用
+      component: () => import('../views/CompareView.vue')
+    },
+    {
       path: '/projects',
       name: 'projects',
       // 本机项目列表（F12）：取代原先只有"本次会话"一行的 HistoryView

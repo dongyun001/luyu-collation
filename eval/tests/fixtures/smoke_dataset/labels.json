@@ -1,0 +1,62 @@
+[
+ {
+  "caseId": "smoke-001",
+  "path": [
+   "形近"
+  ],
+  "hasEditionEvidence": true,
+  "source": "injected",
+  "note": "冒烟夹具（测试用），不是基准语料",
+  "id": "smoke-001-p1",
+  "start": 2,
+  "end": 3,
+  "original": "代",
+  "expectedSuggestion": "伐",
+  "type": "讹字"
+ },
+ {
+  "caseId": "smoke-001",
+  "path": [
+   "形近"
+  ],
+  "hasEditionEvidence": true,
+  "source": "injected",
+  "note": "冒烟夹具（测试用），不是基准语料",
+  "id": "smoke-001-p2",
+  "start": 11,
+  "end": 12,
+  "original": "说",
+  "expectedSuggestion": "悦",
+  "type": "通假"
+ },
+ {
+  "caseId": "smoke-001",
+  "path": [
+   "形近"
+  ],
+  "hasEditionEvidence": true,
+  "source": "injected",
+  "note": "冒烟夹具（测试用），不是基准语料",
+  "id": "smoke-001-p3",
+  "start": 14,
+  "end": 18,
+  "original": "肉食者鄙",
+  "expectedSuggestion": "肉食者陋",
+  "type": "异文"
+ },
+ {
+  "caseId": "smoke-001",
+  "path": [
+   "形近"
+  ],
+  "hasEditionEvidence": true,
+  "source": "injected",
+  "note": "冒烟夹具（测试用），不是基准语料",
+  "id": "smoke-001-p4",
+  "start": 19,
+  "end": 23,
+  "original": "末能远谋",
+  "expectedSuggestion": "未能远谋",
+  "type": "讹字"
+ }
+]

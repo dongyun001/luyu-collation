@@ -20,6 +20,8 @@ const 衍文 = { type: '衍文', original: '舍舍去', suggested: '舍去', rea
 const 脱文 = { type: '脱文', original: '其名鲲', suggested: '其名为鲲', reason: '对文作「其名为鹏」' }
 const 通假 = { type: '通假', original: '说', suggested: '悦', reason: '喜悦之义，只标注不替换' }
 const 异文 = { type: '异文', original: '肉食者鄙', suggested: '肉食者陋', reason: '据通行本' }
+// F13 对校引擎的条目：带 source（别本名），体例与五类不同（见 renderEntry 注释）
+const 对校 = { type: '异文', original: '豫章', suggested: '南昌', reason: '「甲本」作「南昌」', source: '甲本' }
 
 describe('renderEntry 五类体例', () => {
   it('讹字：只取差异单字入引号，不把整段上下文塞进去', () => {
@@ -134,6 +136,15 @@ describe('buildCollationNote', () => {
 
   it('无采纳条目时给出明确说明而不是空白文件', () => {
     expect(buildCollationNote({ items: [] })).toBe('校勘记\n（无采纳的校勘条目）\n')
+  })
+
+  it('对校条目（带 source）用版本体例：别本名进句子，不重复理由', () => {
+    expect(renderEntry(对校)).toBe('「豫章」，甲本作「南昌」。')
+    // 依据是版本本身，句子里已经说清了别本写法与出处，不该再叠一层「一作」
+    expect(renderEntry(对校)).not.toContain('一作')
+    expect(buildCollationNote({ items: [对校], title: '底本对勘' })).toBe(
+      '校勘记——底本对勘\n一、「豫章」，甲本作「南昌」。\n\n以上共一条。\n',
+    )
   })
 })
 

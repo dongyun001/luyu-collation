@@ -33,7 +33,6 @@ from ..utils.errors import LLM_BAD_JSON, LLM_TIMEOUT, PROVIDER_MISCONFIGURED, Ap
 # 上游错误响应回填给开发者的最大长度
 _BODY_EXCERPT = 300
 # 低温采样：校勘要可复现、少发挥
-_TEMPERATURE = 0.2
 # 建连/发请求/取连接的单项超时；"上游有多慢"由停滞看门狗与尝试上限负责
 _CONNECT_TIMEOUT_S = 10.0
 
@@ -110,7 +109,9 @@ def _build_payload(settings: Settings, system_prompt: str, user_prompt: str, *, 
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": _TEMPERATURE,
+        # 温度从配置来（config.DEFAULT_TEMPERATURE = 0.2，可用 LLM_TEMPERATURE 覆盖）：
+        # 单源，且 /health 能报出来，满足 EVAL §5「同一温度」的可查证要求。
+        "temperature": settings.llm_temperature,
         # 流式：这样才能逐块判"是否还在产出"。末尾会带 usage 的块，这里用不到，忽略即可。
         "stream": True,
     }

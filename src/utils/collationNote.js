@@ -7,9 +7,15 @@
  *   脱文：「X」下脱「Y」，{理由}，今补。
  *   通假：「X」通「Y」，{释义}。          （只标注，不改动原文）
  *   异文：「X」，一作「Y」，{取舍理由}。
+ *   版本对勘（对校引擎 F13）：「X」，{别本名}作「Y」。   ← 依据就是版本本身
  *
  * X / Y 由 original 与 suggested 的最小差异段推出：模型给的片段可能带上下文字，
  * 直接整段塞进模板会读成「「学而时习之」，底本误作「日学而时习之」」这种别扭句子。
+ *
+ * 最后一条为什么单独走：对校条目自带 `source`（出自哪个本子），而它的 `reason`
+ * 已经写成「「甲本」作「南昌」」——再套异文模板会得到
+ * 「「豫章」，一作「南昌」，「甲本」作「南昌」。」这种重复句。带 `source` 的条目
+ * 直接把别本名写进句子，同时保住 EVAL §1 要求的"异文必须给出别本依据"。
  */
 
 const DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
@@ -97,6 +103,11 @@ export function renderEntry(item, referenceEdition = '通行本') {
   //（实测中真实模型对异文类正是如此作答）。此时只作纯标注，不宣称任何改动。
   if (item?.original === item?.suggested) {
     return `「${item.original}」${withReason(item.reason)}。`
+  }
+
+  // 版本对勘（F13）：条目带 source = 别本名，体例见文件头
+  if (item?.source) {
+    return `「${item.original}」，${item.source}作「${item.suggested}」。`
   }
 
   const renderer = TYPE_RENDERERS[item?.type]

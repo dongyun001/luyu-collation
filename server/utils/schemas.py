@@ -174,6 +174,11 @@ class HealthResponse(BaseModel):
     status: str
     llmProvider: str
     ocrConfigured: bool
+    # 复现信息（EVAL §8）：当前生效的 Prompt 版本 / 规则开关 / 采样温度。
+    # 前两项由 eval/run_compare.py 自动写进结果 CSV，避免"这批数字跑的是哪个 Prompt"靠人手记。
+    collatePrompt: str
+    rulesEnabled: bool
+    llmTemperature: float
 
 
 class ErrorDetail(BaseModel):
@@ -320,4 +325,58 @@ class AnalyzeResponse(BaseModel):
     dimensions: list[DimensionScore]
     entities: list[AnalyzeEntity]
     relations: list[AnalyzeRelation]
+    droppedCount: int
+
+
+# ---------------------------------------------------------------------------
+# F13 版本对勘（API.md §7）—— 纯规则端点，不调模型
+# ---------------------------------------------------------------------------
+#: 参照本数量上限（API.md §7）。多于 3 个不算是"对勘"，是"批量比对"，交互与结论都会走样。
+MAX_REFERENCES = 3
+
+
+class CompareReference(BaseModel):
+    """一个参照本。`name` 会出现在异文的 `reason` 与 `source` 里，故不能为空。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    text: str
+
+
+class CompareRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    baseText: str
+    references: list[CompareReference]
+
+
+class CompareItem(BaseModel):
+    """对校产出：`type` 只能是「异文」（API.md §7 的收紧契约）。"""
+
+    id: int
+    type: Literal["异文"]
+    original: str
+    suggested: str
+    reason: str
+    offset: int
+    confidence: float
+    source: str
+
+
+class PresenceDiffItem(BaseModel):
+    """版本存缺。`offset` 一律是**底本**中的下标（详见 version_align.PresenceDiff）。"""
+
+    source: str
+    kind: Literal["reference-missing", "reference-extra"]
+    text: str
+    offset: int
+
+
+class CompareResponse(BaseModel):
+    requestId: str
+    elapsedMs: int
+    items: list[CompareItem]
+    presenceDiffs: list[PresenceDiffItem]
+    #: 恒为 0（没有模型输出就没有不合契约的条目可丢）；保留只为与 /collate 形状一致
     droppedCount: int
